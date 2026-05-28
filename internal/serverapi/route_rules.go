@@ -37,6 +37,7 @@ func RegisterRouteRulesAPI(mux *http.ServeMux, store routerules.Store, nodeStore
 		dial:          dial,
 		applyOpts:     applyOpts,
 	}
+	mux.HandleFunc("/v1/routerules/batch", a.handleBatchImport)
 	mux.HandleFunc("/v1/routerules", a.handleRouteRules)
 	mux.HandleFunc("/v1/routerules/", a.handleRouteRuleRoutes)
 }
@@ -62,6 +63,40 @@ func (a *routeRuleAPI) applyAllNodes() {
 	}()
 }
 
+// handleBatchImport 批量创建路由规则（仅 POST）。
+// 请求体：{ "rules": [ {...RouteRule fields without id...} ] }
+// 响应体：{ "created": N }
+func (a *routeRuleAPI) handleBatchImport(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodPost {
+		writeJSON(w, http.StatusMethodNotAllowed, map[string]any{"error": "method not allowed"})
+		return
+	}
+
+	var req struct {
+		Rules []routerules.RouteRule `json:"rules"`
+	}
+	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+		writeJSON(w, http.StatusBadRequest, map[string]any{"error": "invalid json body"})
+		return
+	}
+
+	created := 0
+	for _, rule := range req.Rules {
+		rule.ID = idgen.NextString()
+		if _, err := a.store.Upsert(rule); err != nil {
+			log.Printf("warn: batch import route rule %q: %v", rule.Name, err)
+			continue
+		}
+		created++
+	}
+
+	if created > 0 {
+		a.applyAllNodes()
+	}
+
+	writeJSON(w, http.StatusOK, map[string]any{"created": created})
+}
+
 func (a *routeRuleAPI) handleRouteRules(w http.ResponseWriter, r *http.Request) {
 	switch r.Method {
 	case http.MethodGet:
@@ -81,11 +116,7 @@ func (a *routeRuleAPI) handleRouteRules(w http.ResponseWriter, r *http.Request) 
 			writeJSON(w, http.StatusBadRequest, map[string]any{"error": "name and rule_type are required"})
 			return
 		}
-		if req.RuleType == "rule_set" && req.RuleSetURL == "" {
-			writeJSON(w, http.StatusBadRequest, map[string]any{"error": "rule_set_url is required for rule_set type"})
-			return
-		}
-		if req.RuleType != "rule_set" && req.Patterns == "" {
+		if req.Patterns == "" {
 			writeJSON(w, http.StatusBadRequest, map[string]any{"error": "patterns is required"})
 			return
 		}

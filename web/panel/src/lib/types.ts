@@ -314,7 +314,7 @@ export interface HostsResponse {
 
 // ── Route Rule types ─────────────────────────────────────────────
 
-export type RouteRuleType = "domain_suffix" | "domain_keyword" | "domain" | "ip_cidr" | "rule_set";
+export type RouteRuleType = "domain_suffix" | "domain_keyword" | "domain" | "ip_cidr";
 
 export interface RouteRule {
   id: string;
@@ -323,8 +323,6 @@ export interface RouteRule {
   patterns: string;
   outbound_id: string;
   priority: number;
-  rule_set_url?: string;
-  rule_set_format?: string;
   node_ids?: string;
   inbound_ids?: string;
 }
