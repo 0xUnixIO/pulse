@@ -10,6 +10,7 @@ import (
 	"crypto/x509"
 	"encoding/pem"
 	"fmt"
+	"net"
 	"os"
 	"path/filepath"
 	"strings"
@@ -88,6 +89,7 @@ func New(cfg Config) (*Manager, error) {
 		DNS01Solver: &certmagic.DNS01Solver{
 			DNSManager: certmagic.DNSManager{
 				DNSProvider: &cloudflare.Provider{APIToken: cfg.CloudflareAPIToken},
+				Resolvers:   dnsResolvers(),
 			},
 		},
 	})
@@ -199,6 +201,18 @@ func (m *Manager) GetCertPath(domain string) (certFile, keyFile string, err erro
 		return "", "", fmt.Errorf("certmgr: key not ready for %s: %w", domain, err)
 	}
 	return certFile, keyFile, nil
+}
+
+// dnsResolvers 探测当前网络是否支持 IPv6，返回合适的 DNS resolver 列表。
+// IPv4 resolver 始终包含；IPv6 resolver 仅在能连通时加入。
+func dnsResolvers() []string {
+	resolvers := []string{"1.1.1.1:53", "8.8.8.8:53"}
+	conn, err := net.DialTimeout("udp6", "[2606:4700:4700::1111]:53", 2*time.Second)
+	if err == nil {
+		conn.Close()
+		resolvers = append(resolvers, "[2606:4700:4700::1111]:53")
+	}
+	return resolvers
 }
 
 func isValidDomain(d string) bool {
