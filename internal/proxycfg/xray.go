@@ -687,12 +687,39 @@ func BuildXrayConfig(nodeInbounds []inbounds.Inbound, userAccesses []users.UserI
 	return string(data), nil
 }
 
+// surgeTypePrefix 是 Surge/Clash 规则格式中合法的类型前缀，遇到时跳过整个 token。
+var surgeTypePrefix = map[string]struct{}{
+	"DOMAIN": {}, "DOMAIN-SUFFIX": {}, "DOMAIN-KEYWORD": {},
+	"IP-CIDR": {}, "IP-CIDR6": {}, "GEOIP": {}, "RULE-SET": {},
+}
+
 func splitPatterns(s string) []string {
-	parts := strings.FieldsFunc(s, func(r rune) bool { return r == ',' || r == '\n' })
-	result := make([]string, 0, len(parts))
-	for _, p := range parts {
-		if t := strings.TrimSpace(p); t != "" {
-			result = append(result, t)
+	// 先按换行切，每行再按第一个逗号分割，支持 "DOMAIN-SUFFIX,example.com" 格式。
+	result := make([]string, 0)
+	for _, line := range strings.Split(s, "\n") {
+		line = strings.TrimSpace(line)
+		if line == "" || strings.HasPrefix(line, "#") || strings.HasPrefix(line, "//") {
+			continue
+		}
+		if idx := strings.IndexByte(line, ','); idx > 0 {
+			prefix := strings.ToUpper(line[:idx])
+			value := strings.TrimSpace(line[idx+1:])
+			if _, ok := surgeTypePrefix[prefix]; ok {
+				// Surge/Clash 格式：取逗号后的域名/IP，丢弃第三段（策略）
+				if i := strings.IndexByte(value, ','); i > 0 {
+					value = strings.TrimSpace(value[:i])
+				}
+				if value != "" {
+					result = append(result, value)
+				}
+				continue
+			}
+		}
+		// 普通逗号分隔列表
+		for _, p := range strings.Split(line, ",") {
+			if t := strings.TrimSpace(p); t != "" {
+				result = append(result, t)
+			}
 		}
 	}
 	return result
