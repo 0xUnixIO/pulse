@@ -608,22 +608,22 @@ func BuildXrayConfig(nodeInbounds []inbounds.Inbound, userAccesses []users.UserI
 		if len(patterns) == 0 {
 			continue
 		}
-		switch rr.RuleType {
-		case "domain_suffix":
-			// xray 用 "domain:" 前缀表示后缀匹配
-			for _, p := range patterns {
-				rule.Domain = append(rule.Domain, "domain:"+p)
+		for _, p := range patterns {
+			// Surge 前缀推断的类型优先，否则 fallback 到 rr.RuleType
+			effectiveType := p.surgeRuleType
+			if effectiveType == "" {
+				effectiveType = rr.RuleType
 			}
-		case "domain_keyword":
-			for _, p := range patterns {
-				rule.Domain = append(rule.Domain, "keyword:"+p)
+			switch effectiveType {
+			case "domain_suffix":
+				rule.Domain = append(rule.Domain, "domain:"+p.value)
+			case "domain_keyword":
+				rule.Domain = append(rule.Domain, "keyword:"+p.value)
+			case "domain":
+				rule.Domain = append(rule.Domain, p.value)
+			case "ip_cidr":
+				rule.IP = append(rule.IP, p.value)
 			}
-		case "domain":
-			rule.Domain = patterns
-		case "ip_cidr":
-			rule.IP = patterns
-		default:
-			continue
 		}
 		rule.OutboundTag = ensureOutbound(rr.OutboundID)
 		routingRules = append(routingRules, rule)
@@ -687,15 +687,26 @@ func BuildXrayConfig(nodeInbounds []inbounds.Inbound, userAccesses []users.UserI
 	return string(data), nil
 }
 
-// surgeTypePrefix 是 Surge/Clash 规则格式中合法的类型前缀，遇到时跳过整个 token。
-var surgeTypePrefix = map[string]struct{}{
-	"DOMAIN": {}, "DOMAIN-SUFFIX": {}, "DOMAIN-KEYWORD": {},
-	"IP-CIDR": {}, "IP-CIDR6": {}, "GEOIP": {}, "RULE-SET": {},
+// surgeTypePrefix 将 Surge/Clash 类型前缀映射到内部规则类型。
+var surgeTypePrefix = map[string]string{
+	"DOMAIN-SUFFIX":  "domain_suffix",
+	"DOMAIN-KEYWORD": "domain_keyword",
+	"DOMAIN":         "domain",
+	"IP-CIDR":        "ip_cidr",
+	"IP-CIDR6":       "ip_cidr",
+	"GEOIP":          "",
+	"RULE-SET":       "",
 }
 
-func splitPatterns(s string) []string {
+type parsedPattern struct {
+	// surgeRuleType 非空时表示从 Surge/Clash 前缀推断出的类型，优先于 RouteRule.RuleType。
+	surgeRuleType string
+	value         string
+}
+
+func splitPatterns(s string) []parsedPattern {
 	// 先按换行切，每行再按第一个逗号分割，支持 "DOMAIN-SUFFIX,example.com" 格式。
-	result := make([]string, 0)
+	var result []parsedPattern
 	for _, line := range strings.Split(s, "\n") {
 		line = strings.TrimSpace(line)
 		if line == "" || strings.HasPrefix(line, "#") || strings.HasPrefix(line, "//") {
@@ -703,14 +714,14 @@ func splitPatterns(s string) []string {
 		}
 		if idx := strings.IndexByte(line, ','); idx > 0 {
 			prefix := strings.ToUpper(line[:idx])
-			value := strings.TrimSpace(line[idx+1:])
-			if _, ok := surgeTypePrefix[prefix]; ok {
-				// Surge/Clash 格式：取逗号后的域名/IP，丢弃第三段（策略）
+			if ruleType, ok := surgeTypePrefix[prefix]; ok {
+				value := strings.TrimSpace(line[idx+1:])
+				// 丢弃第三段（策略）
 				if i := strings.IndexByte(value, ','); i > 0 {
 					value = strings.TrimSpace(value[:i])
 				}
-				if value != "" {
-					result = append(result, value)
+				if value != "" && ruleType != "" {
+					result = append(result, parsedPattern{surgeRuleType: ruleType, value: value})
 				}
 				continue
 			}
@@ -718,7 +729,7 @@ func splitPatterns(s string) []string {
 		// 普通逗号分隔列表
 		for _, p := range strings.Split(line, ",") {
 			if t := strings.TrimSpace(p); t != "" {
-				result = append(result, t)
+				result = append(result, parsedPattern{value: t})
 			}
 		}
 	}
