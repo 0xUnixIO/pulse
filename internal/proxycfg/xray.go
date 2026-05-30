@@ -97,7 +97,7 @@ type xraySystemPolicy struct {
 
 type xrayInbound struct {
 	Tag            string              `json:"tag"`
-	Listen         string              `json:"listen"`
+	Listen         string              `json:"listen,omitempty"`
 	Port           int                 `json:"port"`
 	Protocol       string              `json:"protocol"`
 	Settings       xrayInboundSettings `json:"settings"`
@@ -394,7 +394,7 @@ func BuildXrayConfig(nodeInbounds []inbounds.Inbound, userAccesses []users.UserI
 		if ib.Protocol == "trojan" {
 			listenAddr = "127.0.0.1"
 		} else if ib.Protocol == "shadowsocks" {
-			listenAddr = "::" // 双栈监听（Linux IPV6_V6ONLY=0 时同时接受 IPv4 / IPv6）
+			listenAddr = "" // 省略 listen 字段，Xray 走 AnyIP 路径，Go net.Listen(":port") 双栈
 		}
 
 		xib := xrayInbound{
