@@ -394,7 +394,7 @@ func BuildXrayConfig(nodeInbounds []inbounds.Inbound, userAccesses []users.UserI
 		if ib.Protocol == "trojan" {
 			listenAddr = "127.0.0.1"
 		} else if ib.Protocol == "shadowsocks" {
-			listenAddr = "" // 空字符串让 Xray 双栈监听（同时接受 IPv4 / IPv6）
+			listenAddr = "::" // 双栈监听（Linux IPV6_V6ONLY=0 时同时接受 IPv4 / IPv6）
 		}
 
 		xib := xrayInbound{
