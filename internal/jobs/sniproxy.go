@@ -17,7 +17,7 @@ import (
 //   - HTTPReverse：node.PanelDomain（反代到 pulse-server panelPort）
 //                  以及 node.ExtraProxies（每行 "domain:port" 反代到 127.0.0.1:port）
 //
-// 监听端口优先级：node.HTTPSPort > Host.HTTPSPort > 透明路由 ListenPort > 443。
+// 监听端口优先级：node.HTTPSPort > 本地直连 Host.Port > Host.HTTPSPort(中转) > 443。
 func BuildSNIProxySyncReq(
 	node nodes.Node,
 	nodeInbounds []inbounds.Inbound,
@@ -28,6 +28,9 @@ func BuildSNIProxySyncReq(
 ) nodes.SNIProxySyncRequest {
 	var routes []nodes.SNIProxyRoute
 	hostHTTPSPort := 0
+	// 本地直连 AnyTLS/Trojan host 的对外监听端口：客户端直连 NodeGate，
+	// 故 NodeGate 必须监听该 Host.Port（= 订阅链接里写给客户端的端口）。
+	localListenPort := 0
 
 	// 1. 本节点 AnyTLS/Trojan inbound 路由：terminating，NodeGate 终止 TLS 转发明文给 Xray
 	seenLocal := make(map[string]struct{})
@@ -58,6 +61,11 @@ func BuildSNIProxySyncReq(
 				continue
 			}
 			seenLocal[sni] = struct{}{}
+			// 取第一个非 0 的本地 Host.Port 作为 NodeGate 监听端口
+			// （NodeGate 单端口监听，按 SNI 分流，与各 host 的 Xray 后端端口无关）。
+			if localListenPort == 0 && h.Port > 0 {
+				localListenPort = h.Port
+			}
 			routes = append(routes, nodes.SNIProxyRoute{
 				SNI:     sni,
 				Backend: fmt.Sprintf("127.0.0.1:%d", ib.Port),
@@ -166,11 +174,14 @@ func BuildSNIProxySyncReq(
 
 	// 监听端口决策
 	listenPort := 0
-	if node.HTTPSPort > 0 {
+	switch {
+	case node.HTTPSPort > 0:
 		listenPort = node.HTTPSPort
-	} else if hostHTTPSPort > 0 {
+	case localListenPort > 0:
+		listenPort = localListenPort
+	case hostHTTPSPort > 0:
 		listenPort = hostHTTPSPort
-	} else if len(routes) > 0 {
+	case len(routes) > 0:
 		listenPort = 443
 	}
 
