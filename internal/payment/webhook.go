@@ -214,7 +214,12 @@ func (d *WebhookDeps) renewExistingUser(order orders.Order, plan plans.Plan, now
 	user.UsedBytes = 0
 	user.RawUploadBytes = 0
 	user.RawDownloadBytes = 0
-	user.LastTrafficResetAt = &now
+	// 未过期续费时以旧 ExpireAt 为锚点，确保下次定时重置与套餐周期对齐
+	if notExpired {
+		user.LastTrafficResetAt = user.ExpireAt
+	} else {
+		user.LastTrafficResetAt = &now
+	}
 	user.DataLimitResetStrategy = plan.DataLimitResetStrategy
 	user.CurrentPlanID = plan.ID
 	user.Status = users.StatusActive
@@ -235,8 +240,9 @@ func (d *WebhookDeps) renewExistingUser(order orders.Order, plan plans.Plan, now
 		if err := d.AddUserToGroups(user.ID, gIDs); err != nil {
 			log.Printf("payment: renew add user to groups: %v", err)
 		}
-	} else if d.ApplyUserNodes != nil {
-		// 无用户组时 AddUserToGroups 不会触发下发，需单独推送
+	}
+	// 无论组操作结果如何，统一触发节点下发（流量/到期已变更）
+	if d.ApplyUserNodes != nil {
 		go d.ApplyUserNodes(user.ID)
 	}
 
@@ -350,6 +356,10 @@ func (d *WebhookDeps) handleInvoicePaymentFailed(event stripe.Event) {
 		user.Status = users.StatusOnHold
 		if _, err := d.UserStore.UpsertUser(user); err != nil {
 			log.Printf("payment: set user %s on_hold: %v", user.ID, err)
+			return
+		}
+		if d.ApplyUserNodes != nil {
+			go d.ApplyUserNodes(user.ID)
 		}
 		return
 	}
@@ -366,6 +376,10 @@ func (d *WebhookDeps) handleInvoicePaymentFailed(event stripe.Event) {
 	user.Status = users.StatusOnHold
 	if _, err := d.UserStore.UpsertUser(user); err != nil {
 		log.Printf("payment: set user %s on_hold: %v", user.ID, err)
+		return
+	}
+	if d.ApplyUserNodes != nil {
+		go d.ApplyUserNodes(user.ID)
 	}
 }
 
@@ -397,6 +411,10 @@ func (d *WebhookDeps) handleSubscriptionDeleted(event stripe.Event) {
 		user.Status = users.StatusDisabled
 		if _, err := d.UserStore.UpsertUser(user); err != nil {
 			log.Printf("payment: disable user %s: %v", user.ID, err)
+			return
+		}
+		if d.ApplyUserNodes != nil {
+			go d.ApplyUserNodes(user.ID)
 		}
 		return
 	}
@@ -413,6 +431,10 @@ func (d *WebhookDeps) handleSubscriptionDeleted(event stripe.Event) {
 	user.Status = users.StatusDisabled
 	if _, err := d.UserStore.UpsertUser(user); err != nil {
 		log.Printf("payment: disable user %s: %v", user.ID, err)
+		return
+	}
+	if d.ApplyUserNodes != nil {
+		go d.ApplyUserNodes(user.ID)
 	}
 }
 
