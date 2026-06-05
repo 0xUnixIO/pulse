@@ -10,6 +10,7 @@ ExecStart=/usr/local/bin/pulse-server
 WorkingDirectory=/var/lib/pulse
 Restart=always
 RestartSec=3
+TimeoutStopSec=15
 User=root
 
 [Install]
