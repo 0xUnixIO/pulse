@@ -268,6 +268,12 @@ func (a *userAPI) handleUpdateUser(w http.ResponseWriter, r *http.Request, userI
 		}
 		user.DataLimitResetStrategy = req.DataLimitResetStrategy
 	}
+	// 在字段赋值前记录变更，避免赋值后比较恒为 false
+	proxyFieldChanged := req.Status != "" ||
+		req.ExpireAt != nil ||
+		(req.TrafficLimit >= 0 && req.TrafficLimit != user.TrafficLimit) ||
+		req.DataLimitResetStrategy != ""
+
 	if req.TrafficLimit >= 0 && req.TrafficLimit != user.TrafficLimit {
 		user.TrafficLimit = req.TrafficLimit
 	}
@@ -325,6 +331,11 @@ func (a *userAPI) handleUpdateUser(w http.ResponseWriter, r *http.Request, userI
 			return
 		}
 		a.applyNodes(affected)
+	} else if proxyFieldChanged {
+		// 仅改了状态/流量/到期时间，需推送到已关联的节点
+		if err := a.triggerUserApply(userID); err != nil {
+			log.Printf("handleUpdateUser: trigger apply %s: %v", userID, err)
+		}
 	}
 	writeJSON(w, http.StatusOK, updated)
 }
@@ -379,6 +390,7 @@ func (a *userAPI) handleUserInbounds(w http.ResponseWriter, r *http.Request, use
 			internalError(w, r, err)
 			return
 		}
+		a.applyNodes([]string{ib.NodeID})
 		writeJSON(w, http.StatusOK, acc)
 	default:
 		writeMethodNotAllowed(w, http.MethodGet+", "+http.MethodPost)
@@ -412,6 +424,7 @@ func (a *userAPI) handleUserInbound(w http.ResponseWriter, r *http.Request, user
 			writeUserInboundError(w, err)
 			return
 		}
+		a.applyNodes([]string{acc.NodeID})
 		writeJSON(w, http.StatusOK, map[string]any{"deleted": true})
 	default:
 		writeMethodNotAllowed(w, http.MethodGet+", "+http.MethodDelete)

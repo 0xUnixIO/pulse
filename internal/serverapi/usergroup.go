@@ -3,6 +3,7 @@ package serverapi
 import (
 	"encoding/json"
 	"errors"
+	"log"
 	"net/http"
 	"strings"
 	"time"
@@ -265,6 +266,21 @@ func (a *userGroupAPI) handleGroupMemberByUID(w http.ResponseWriter, r *http.Req
 		writeMethodNotAllowed(w, http.MethodDelete)
 		return
 	}
+	// 删除前先收集该用户在此组的节点 ID，用于删除后触发下发
+	var affectedNodes []string
+	if accesses, err := a.userStore.ListUserInboundsByUser(userID); err != nil {
+		log.Printf("handleGroupMemberByUID: list inbounds user=%s: %v (node push may be incomplete)", userID, err)
+	} else {
+		seen := make(map[string]struct{})
+		for _, acc := range accesses {
+			if acc.GroupID == groupID {
+				if _, dup := seen[acc.NodeID]; !dup {
+					seen[acc.NodeID] = struct{}{}
+					affectedNodes = append(affectedNodes, acc.NodeID)
+				}
+			}
+		}
+	}
 	if err := a.ugStore.RemoveMember(groupID, userID); err != nil {
 		internalError(w, r, err)
 		return
@@ -274,6 +290,7 @@ func (a *userGroupAPI) handleGroupMemberByUID(w http.ResponseWriter, r *http.Req
 		internalError(w, r, err)
 		return
 	}
+	a.applyNodes(affectedNodes)
 	writeJSON(w, http.StatusOK, map[string]any{"removed": true})
 }
 
