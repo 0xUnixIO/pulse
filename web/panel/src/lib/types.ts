@@ -113,6 +113,7 @@ export interface User {
   expire_at?: string;
   data_limit_reset_strategy: ResetStrategy;
   traffic_limit_bytes: number;
+  plan_traffic_limit_bytes: number;
   upload_bytes: number;
   download_bytes: number;
   used_bytes: number;

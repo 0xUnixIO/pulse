@@ -1093,6 +1093,15 @@ export default function UsersPage() {
                 value={editTrafficGb}
                 onChange={(e) => setEditTrafficGb(e.target.value)}
               />
+              {editingUser &&
+                editingUser.plan_traffic_limit_bytes > 0 &&
+                editingUser.plan_traffic_limit_bytes !== editingUser.traffic_limit_bytes && (
+                  <p className="text-xs text-muted-foreground">
+                    含叠加流量，套餐基础额度{" "}
+                    {parseFloat(bytesToGb(editingUser.plan_traffic_limit_bytes).toFixed(2))} GB，
+                    下个周期重置至此值
+                  </p>
+                )}
             </div>
 
             {/* Expire date */}
