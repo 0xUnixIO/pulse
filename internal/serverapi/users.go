@@ -58,6 +58,8 @@ type updateUserRequest struct {
 	LastTrafficResetAt     *time.Time `json:"last_traffic_reset_at,omitempty"`
 	ClearLastTrafficReset  bool       `json:"clear_last_traffic_reset_at,omitempty"`
 	InboundIDs             *[]string  `json:"inbound_ids,omitempty"`
+	// PlanTrafficLimit 非 nil 时覆盖套餐基础额度（周期重置目标）；0 表示与 TrafficLimit 相同。
+	PlanTrafficLimit *int64 `json:"plan_traffic_limit_bytes,omitempty"`
 	// Password 非 nil 时更新门户密码：空字符串清除密码，非空字符串设置新密码。
 	Password *string `json:"password,omitempty"`
 }
@@ -280,6 +282,9 @@ func (a *userAPI) handleUpdateUser(w http.ResponseWriter, r *http.Request, userI
 	if req.TrafficLimit >= 0 && req.TrafficLimit != user.TrafficLimit {
 		user.TrafficLimit = req.TrafficLimit
 		user.PlanTrafficLimit = req.TrafficLimit
+	}
+	if req.PlanTrafficLimit != nil {
+		user.PlanTrafficLimit = *req.PlanTrafficLimit
 	}
 	if req.Note != nil {
 		user.Note = strings.TrimSpace(*req.Note)

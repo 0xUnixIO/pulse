@@ -237,6 +237,7 @@ export default function UsersPage() {
   // ── Edit form state ──────────────────────────────────────────
   const [editStatus, setEditStatus] = useState<UserStatus>("active");
   const [editTrafficGb, setEditTrafficGb] = useState("");
+  const [editPlanTrafficGb, setEditPlanTrafficGb] = useState("");
   const [editExpireAt, setEditExpireAt] = useState("");
   const [editResetStrategy, setEditResetStrategy] = useState<ResetStrategy>("no_reset");
   const [editNote, setEditNote] = useState("");
@@ -489,6 +490,11 @@ export default function UsersPage() {
         ? String(parseFloat(bytesToGb(user.traffic_limit_bytes).toFixed(2)))
         : "",
     );
+    setEditPlanTrafficGb(
+      user.plan_traffic_limit_bytes > 0 && user.plan_traffic_limit_bytes !== user.traffic_limit_bytes
+        ? String(parseFloat(bytesToGb(user.plan_traffic_limit_bytes).toFixed(2)))
+        : "",
+    );
     setEditExpireAt(isoToDateInput(user.expire_at));
     setEditResetStrategy(user.data_limit_reset_strategy);
     setEditNote(user.note ?? "");
@@ -532,6 +538,14 @@ export default function UsersPage() {
         body.traffic_limit_bytes = gbToBytes(trafficGb);
       } else {
         body.traffic_limit_bytes = 0;
+      }
+
+      const planTrafficGb = parseFloat(editPlanTrafficGb);
+      if (editPlanTrafficGb && !isNaN(planTrafficGb) && planTrafficGb > 0) {
+        body.plan_traffic_limit_bytes = gbToBytes(planTrafficGb);
+      } else if (editingUser && editingUser.plan_traffic_limit_bytes !== editingUser.traffic_limit_bytes) {
+        // 用户清空了覆盖字段，重置为与流量限额相同（让后端同步）
+        body.plan_traffic_limit_bytes = body.traffic_limit_bytes ?? 0;
       }
 
       if (editExpireAt) {
@@ -1093,15 +1107,24 @@ export default function UsersPage() {
                 value={editTrafficGb}
                 onChange={(e) => setEditTrafficGb(e.target.value)}
               />
-              {editingUser &&
-                editingUser.plan_traffic_limit_bytes > 0 &&
-                editingUser.plan_traffic_limit_bytes !== editingUser.traffic_limit_bytes && (
-                  <p className="text-xs text-muted-foreground">
-                    含叠加流量，套餐基础额度{" "}
-                    {parseFloat(bytesToGb(editingUser.plan_traffic_limit_bytes).toFixed(2))} GB，
-                    下个周期重置至此值
-                  </p>
-                )}
+              <div className="grid gap-1">
+                <Label htmlFor="edit-plan-traffic" className="text-xs text-muted-foreground">
+                  重置目标（GB）
+                </Label>
+                <Input
+                  id="edit-plan-traffic"
+                  type="number"
+                  min="0"
+                  step="0.1"
+                  placeholder="留空则与流量限额相同"
+                  value={editPlanTrafficGb}
+                  onChange={(e) => setEditPlanTrafficGb(e.target.value)}
+                  className="h-8 text-sm"
+                />
+                <p className="text-xs text-muted-foreground">
+                  叠加后下个周期恢复的基础额度，留空时等同于流量限额
+                </p>
+              </div>
             </div>
 
             {/* Expire date */}
