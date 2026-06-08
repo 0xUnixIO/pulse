@@ -405,7 +405,7 @@ export default function UsersPage() {
     const plan = allPlans.find((p) => p.id === planId);
     if (!plan) return;
     if (plan.traffic_limit > 0) {
-      setCreateTrafficGb(String(parseFloat((plan.traffic_limit / 1e9).toFixed(2))));
+      setCreateTrafficGb(String(parseFloat(bytesToGb(plan.traffic_limit).toFixed(2))));
     }
     if (plan.duration_days > 0) {
       const expiry = new Date();
