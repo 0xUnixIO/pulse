@@ -32,7 +32,7 @@ func setupTestMux(t *testing.T, nodeHandlers map[string]func(body any) (json.Raw
 	baseAPI.clientFactory = fakeHubClientFactory(hub)
 
 	ibStore := inbounds.NewMemoryStore()
-	userAPI := newUserAPI(users.NewMemoryStore(), nodeStore, ibStore, nil, baseAPI, jobs.ApplyOptions{}, nil)
+	userAPI := newUserAPI(users.NewMemoryStore(), nodeStore, ibStore, nil, baseAPI, nil, jobs.ApplyOptions{}, nil)
 	mux := http.NewServeMux()
 	userAPI.Register(mux)
 
@@ -149,7 +149,7 @@ func TestCreateUserAutoGeneratesID(t *testing.T) {
 	})
 
 	baseAPI := New(nodeStore)
-	userAPI := newUserAPI(users.NewMemoryStore(), nodeStore, inbounds.NewMemoryStore(), nil, baseAPI, jobs.ApplyOptions{}, nil)
+	userAPI := newUserAPI(users.NewMemoryStore(), nodeStore, inbounds.NewMemoryStore(), nil, baseAPI, nil, jobs.ApplyOptions{}, nil)
 	mux := http.NewServeMux()
 	userAPI.Register(mux)
 

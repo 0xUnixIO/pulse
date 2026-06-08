@@ -1102,7 +1102,7 @@ func Run() error {
 	nodeAPI2.Register(protectedV1)
 	// 改密端点（需要认证）
 	serverapi.RegisterAuthCredentialsAPI(protectedV1, userStore, authManager.DeleteAllSessions)
-	serverapi.RegisterUsersAPI(protectedV1, userStore, store, inboundStore, outboundStore, applyOpts, geoipDB, db.PortalSessionStore())
+	serverapi.RegisterUsersAPI(protectedV1, userStore, store, inboundStore, outboundStore, nodeAPI.Dial, applyOpts, geoipDB, db.PortalSessionStore())
 	serverapi.RegisterSystemAPIWithInbounds(protectedV1, userStore, store, inboundStore, applyOpts)
 	serverapi.RegisterInboundsAPI(protectedV1, inboundStore, userStore, store, outboundStore, nodeAPI.Dial, applyOpts, nodeAPI2.TriggerNodeSync)
 	serverapi.RegisterOutboundsAPI(protectedV1, outboundStore)

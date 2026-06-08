@@ -31,6 +31,7 @@ type userAPI struct {
 	inboundStore  inbounds.InboundStore
 	outboundStore outbounds.Store
 	base          *API
+	dial          jobs.NodeDialer    // 带 hub 的节点拨号器，用于配置下发
 	applyOpts     jobs.ApplyOptions
 	geoDB         *geoip.DB          // 可为 nil，nil 时跳过地理位置查询
 	sessions      PortalSessionStore // 可为 nil，nil 时跳过 session 失效
@@ -69,13 +70,14 @@ type createAccessRequest struct {
 	Secret    string `json:"secret,omitempty"` // 可留空自动生成
 }
 
-func newUserAPI(usersStore users.Store, nodesStore nodes.Store, ibStore inbounds.InboundStore, outboundStore outbounds.Store, base *API, applyOpts jobs.ApplyOptions, geoDB *geoip.DB) *userAPI {
+func newUserAPI(usersStore users.Store, nodesStore nodes.Store, ibStore inbounds.InboundStore, outboundStore outbounds.Store, base *API, dial jobs.NodeDialer, applyOpts jobs.ApplyOptions, geoDB *geoip.DB) *userAPI {
 	return &userAPI{
 		users:         usersStore,
 		nodes:         nodesStore,
 		inboundStore:  ibStore,
 		outboundStore: outboundStore,
 		base:          base,
+		dial:          dial,
 		applyOpts:     applyOpts,
 		geoDB:         geoDB,
 	}
@@ -122,6 +124,7 @@ func (a *userAPI) handleUsers(w http.ResponseWriter, r *http.Request) {
 			ExpireAt:               req.ExpireAt,
 			DataLimitResetStrategy: req.DataLimitResetStrategy,
 			TrafficLimit:           req.TrafficLimit,
+			PlanTrafficLimit:       req.TrafficLimit,
 			SubToken:               randomToken(16),
 			UUID:                   randomUUID(),
 			Secret:                 randomToken(16),
@@ -276,6 +279,7 @@ func (a *userAPI) handleUpdateUser(w http.ResponseWriter, r *http.Request, userI
 
 	if req.TrafficLimit >= 0 && req.TrafficLimit != user.TrafficLimit {
 		user.TrafficLimit = req.TrafficLimit
+		user.PlanTrafficLimit = req.TrafficLimit
 	}
 	if req.Note != nil {
 		user.Note = strings.TrimSpace(*req.Note)
@@ -814,11 +818,15 @@ func (a *userAPI) triggerUserApply(userID string) error {
 
 // applyNodes pushes config to affected nodes after inbound association changes.
 func (a *userAPI) applyNodes(nodeIDs []string) {
+	dial := a.dial
+	if dial == nil {
+		dial = a.base.Dial
+	}
 	for _, nodeID := range nodeIDs {
 		go func(id string) {
 			ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
 			defer cancel()
-			if err := jobs.ApplyNode(ctx, id, a.nodes, a.users, a.inboundStore, a.outboundStore, a.base.Dial, a.applyOpts); err != nil {
+			if err := jobs.ApplyNode(ctx, id, a.nodes, a.users, a.inboundStore, a.outboundStore, dial, a.applyOpts); err != nil {
 				log.Printf("applyNodes: %s: %v", id, err)
 			}
 		}(nodeID)

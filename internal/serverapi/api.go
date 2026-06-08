@@ -128,11 +128,11 @@ func (a *API) nodeWithOnline(node nodes.Node) map[string]any {
 	return m
 }
 
-func RegisterUsersAPI(mux *http.ServeMux, usersStore users.Store, nodesStore nodes.Store, inboundStore inbounds.InboundStore, outboundStore outbounds.Store, applyOpts jobs.ApplyOptions, geoDB *geoip.DB, sesStore PortalSessionStore) {
+func RegisterUsersAPI(mux *http.ServeMux, usersStore users.Store, nodesStore nodes.Store, inboundStore inbounds.InboundStore, outboundStore outbounds.Store, dial jobs.NodeDialer, applyOpts jobs.ApplyOptions, geoDB *geoip.DB, sesStore PortalSessionStore) {
 	base := New(nodesStore)
 	base.inboundStore = inboundStore
 	base.outboundStore = outboundStore
-	a := newUserAPI(usersStore, nodesStore, inboundStore, outboundStore, base, applyOpts, geoDB)
+	a := newUserAPI(usersStore, nodesStore, inboundStore, outboundStore, base, dial, applyOpts, geoDB)
 	a.sessions = sesStore
 	a.Register(mux)
 }
