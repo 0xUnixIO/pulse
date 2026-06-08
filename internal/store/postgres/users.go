@@ -56,6 +56,7 @@ func (s *UserStore) UpsertUser(user users.User) (users.User, error) {
 		Email:                  user.Email,
 		Uuid:                   user.UUID,
 		Secret:                 user.Secret,
+		PlanTrafficLimitBytes:  user.PlanTrafficLimit,
 	})
 	if err != nil {
 		var pgErr *pgconn.PgError
@@ -461,6 +462,7 @@ func toUser(r sqlcgen.User) (users.User, error) {
 		Note:                   r.Note,
 		DataLimitResetStrategy: r.DataLimitResetStrategy,
 		TrafficLimit:           r.TrafficLimitBytes,
+		PlanTrafficLimit:       r.PlanTrafficLimitBytes,
 		UploadBytes:            r.UploadBytes,
 		DownloadBytes:          r.DownloadBytes,
 		UsedBytes:              r.UsedBytes,

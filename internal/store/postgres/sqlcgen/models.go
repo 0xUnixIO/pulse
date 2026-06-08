@@ -313,6 +313,7 @@ type User struct {
 	Email                  string
 	Uuid                   string
 	Secret                 string
+	PlanTrafficLimitBytes  int64
 }
 
 type UserGroup struct {

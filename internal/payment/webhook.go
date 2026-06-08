@@ -144,6 +144,7 @@ func (d *WebhookDeps) provisionNewUser(order *orders.Order, plan plans.Plan, now
 		Username:               baseUsername,
 		Status:                 users.StatusActive,
 		TrafficLimit:           plan.TrafficLimit,
+		PlanTrafficLimit:       plan.TrafficLimit,
 		DataLimitResetStrategy: plan.DataLimitResetStrategy,
 		ExpireAt:               &expireAt,
 		CreatedAt:              now,
@@ -207,8 +208,17 @@ func (d *WebhookDeps) renewExistingUser(order orders.Order, plan plans.Plan, now
 	expireAt := base.Add(time.Duration(plan.DurationDays) * 24 * time.Hour)
 	user.ExpireAt = &expireAt
 
-	// 流量：统一重置为新套餐额度并清零已用量，避免叠加与到期重置不一致
-	user.TrafficLimit = plan.TrafficLimit
+	// 流量：剩余量叠加到新套餐额度，清零计数器以保证 SyncUsage delta 正确
+	user.PlanTrafficLimit = plan.TrafficLimit
+	if plan.TrafficLimit == 0 {
+		user.TrafficLimit = 0 // 新套餐无限流量
+	} else {
+		remaining := user.TrafficLimit - user.UsedBytes
+		if remaining < 0 {
+			remaining = 0
+		}
+		user.TrafficLimit = remaining + plan.TrafficLimit
+	}
 	user.UploadBytes = 0
 	user.DownloadBytes = 0
 	user.UsedBytes = 0
@@ -311,7 +321,17 @@ func (d *WebhookDeps) handleInvoicePaid(event stripe.Event) {
 	user.ExpireAt = &expireAt
 	user.Status = users.StatusActive
 
-	// 续费时重置流量（含原始游标，否则 SyncUsage delta 会将历史流量计入新周期）
+	// 流量：剩余量叠加到套餐额度，清零计数器以保证 SyncUsage delta 正确
+	user.PlanTrafficLimit = plan.TrafficLimit
+	if plan.TrafficLimit == 0 {
+		user.TrafficLimit = 0 // 套餐无限流量
+	} else {
+		remaining := user.TrafficLimit - user.UsedBytes
+		if remaining < 0 {
+			remaining = 0
+		}
+		user.TrafficLimit = remaining + plan.TrafficLimit
+	}
 	user.UploadBytes = 0
 	user.DownloadBytes = 0
 	user.UsedBytes = 0

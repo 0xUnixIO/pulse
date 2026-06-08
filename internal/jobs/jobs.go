@@ -672,6 +672,10 @@ func ResetTraffic(ctx context.Context, store users.Store, nodeStore nodes.Store,
 		user.UsedBytes = 0
 		user.RawUploadBytes = 0
 		user.RawDownloadBytes = 0
+		// 有套餐基础额度时还原，消除叠加量；0 表示无限或未设置，保持不变
+		if user.PlanTrafficLimit > 0 {
+			user.TrafficLimit = user.PlanTrafficLimit
+		}
 		user.LastTrafficResetAt = &now
 		if _, err := store.UpsertUser(user); err != nil {
 			result.Errors = append(result.Errors, user.ID+": "+err.Error())

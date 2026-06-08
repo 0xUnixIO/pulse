@@ -401,6 +401,13 @@ var schemaMigrations = []migration{
 			`ALTER TABLE inbounds ADD COLUMN IF NOT EXISTS extra TEXT NOT NULL DEFAULT ''`,
 		},
 	},
+	{
+		version: 3,
+		label:   "users.plan_traffic_limit_bytes (套餐基础额度，用于流量叠加后周期重置)",
+		stmts: []string{
+			`ALTER TABLE users ADD COLUMN IF NOT EXISTS plan_traffic_limit_bytes BIGINT NOT NULL DEFAULT 0`,
+		},
+	},
 }
 
 func (db *DB) init() error {

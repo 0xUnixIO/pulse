@@ -34,6 +34,7 @@ type User struct {
 	ExpireAt               *time.Time `json:"expire_at,omitempty"`
 	DataLimitResetStrategy string     `json:"data_limit_reset_strategy"`
 	TrafficLimit           int64      `json:"traffic_limit_bytes"`
+	PlanTrafficLimit       int64      `json:"plan_traffic_limit_bytes"`
 	UploadBytes            int64      `json:"upload_bytes"`
 	DownloadBytes          int64      `json:"download_bytes"`
 	UsedBytes              int64      `json:"used_bytes"`
