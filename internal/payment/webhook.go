@@ -149,6 +149,8 @@ func (d *WebhookDeps) provisionNewUser(order *orders.Order, plan plans.Plan, now
 		ExpireAt:               &expireAt,
 		CreatedAt:              now,
 		SubToken:               subToken,
+		UUID:                   randomUUID(),
+		Secret:                 randomHex(16),
 		StripeCustomerID:       order.StripeCustomerID,
 		CurrentPlanID:          plan.ID,
 		Email:                  order.Email,
@@ -483,4 +485,15 @@ func randomHex(n int) string {
 		panic(fmt.Sprintf("payment: crypto/rand.Read failed: %v", err))
 	}
 	return fmt.Sprintf("%x", buf)
+}
+
+// randomUUID 生成用户级全局 VLESS UUID（v4），与 serverapi.randomUUID 格式一致。
+func randomUUID() string {
+	buf := make([]byte, 16)
+	if _, err := rand.Read(buf); err != nil {
+		panic(fmt.Sprintf("payment: crypto/rand.Read failed: %v", err))
+	}
+	buf[6] = (buf[6] & 0x0f) | 0x40
+	buf[8] = (buf[8] & 0x3f) | 0x80
+	return fmt.Sprintf("%x-%x-%x-%x-%x", buf[0:4], buf[4:6], buf[6:8], buf[8:10], buf[10:16])
 }
