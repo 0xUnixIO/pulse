@@ -500,6 +500,9 @@ func BuildXrayConfig(nodeInbounds []inbounds.Inbound, userAccesses []users.UserI
 			}
 			sort.Slice(clients, func(i, j int) bool { return clients[i].Email < clients[j].Email })
 			xib.Settings = xrayInboundSettings{
+				// 必须显式声明 network：省略时 Xray 的 NetworkList.Build() 缺省返回 [TCP]，
+				// UDP 会被静默禁用（inbound_multi.go 的 TCP+UDP 兜底只在 len==0 时触发）。
+				Network:  "tcp,udp",
 				Method:   method,
 				Password: ib.Password, // server PSK
 				Clients:  clients,
