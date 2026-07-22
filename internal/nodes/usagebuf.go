@@ -34,19 +34,32 @@ func NewUsageBuffer() *UsageBuffer {
 	}
 }
 
+// seqEpochGap 判定节点 seq 计数器重置（进程重启）的最小回退幅度。
+// 正常重传/乱序回退通常为 1～数个序号；node 重启后 nextSeq 从 1 起而 server
+// lastSeq 可能已达数千，差值远大于此阈值。
+const seqEpochGap = uint64(64)
+
 // Append 接收一帧 push usage。返回值表示 ack 是否成功（始终 nil，表示立即 ack）。
 //
 // 去重：同一 nodeID 上 seq <= 已记录的最大值会被丢弃（不入 pending），但仍返回 nil
 // 让 node 端 ack 推进 baseline。这样能容忍 node 重发已成功处理但 ack 丢失的帧。
+//
+// 纪元切换：若 seq 明显回退（last-seq >= seqEpochGap），视为节点进程重启后
+// nextSeq 归零，重置 lastSeq 并接受该帧，避免长时间丢流量。
 func (b *UsageBuffer) Append(nodeID string, seq uint64, delta UsageStats) error {
 	if nodeID == "" {
 		return nil
 	}
 	b.mu.Lock()
 	defer b.mu.Unlock()
-	if last, ok := b.lastSeq[nodeID]; ok && seq <= last && seq != 0 {
+	if last, ok := b.lastSeq[nodeID]; ok && seq != 0 && seq <= last {
+		if last-seq >= seqEpochGap {
+			// 节点重启：seq 从低位重新计数，开启新纪元。
+			b.lastSeq[nodeID] = seq
+			b.pending[nodeID] = append(b.pending[nodeID], usageEntry{Seq: seq, Delta: delta})
+			return nil
+		}
 		// 重复或乱序的旧帧：ack 但不重复计入。
-		// seq==0 是兜底，nodeagent 实际会从 1 开始；这里允许 0 入库。
 		return nil
 	}
 	b.pending[nodeID] = append(b.pending[nodeID], usageEntry{Seq: seq, Delta: delta})
@@ -54,6 +67,15 @@ func (b *UsageBuffer) Append(nodeID string, seq uint64, delta UsageStats) error 
 		b.lastSeq[nodeID] = seq
 	}
 	return nil
+}
+
+// Requeue 将已 Drain 的聚合 delta 重新入队（seq=0，始终接受）。
+// 用于 SyncUsage 在落库失败时回填，避免 push 流量静默丢失。
+func (b *UsageBuffer) Requeue(nodeID string, delta UsageStats) {
+	if b == nil || nodeID == "" {
+		return
+	}
+	_ = b.Append(nodeID, 0, delta)
 }
 
 // Drain 取走某节点所有 pending 帧，把多帧合并为单一累计 delta。

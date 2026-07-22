@@ -76,6 +76,14 @@ func collectHy2SNIs(ibs []inbounds.Inbound) []string {
 // 锁只包住 DB 读写段，网络 IO（节点流量拉取、配置下发）在锁外执行。
 var mu sync.Mutex
 
+// WithUserLock 串行化用户写路径（支付 webhook / 面板与 SyncUsage 等），
+// 避免全字段 UpsertUser 与流量累加互相覆盖。
+func WithUserLock(fn func()) {
+	mu.Lock()
+	defer mu.Unlock()
+	fn()
+}
+
 // nodeFailCount 记录每个节点的连续失败次数，用于告警防抖。
 // 连续失败 alertThreshold 次才推送通知，避免单次瞬断误报。
 var (
@@ -255,9 +263,17 @@ func SyncUsageWith(ctx context.Context, store users.Store, nodeStore nodes.Store
 			nodeResetFail(fr.node.ID)
 		}
 
+		// push 路径落库失败时回填 buffer，避免 ack 已发、delta 静默丢失。
+		requeuePush := func() {
+			if fr.fromPush && usageBuf != nil {
+				usageBuf.Requeue(fr.node.ID, fr.usage)
+			}
+		}
+
 		userAccesses, err := store.ListUserInboundsByNode(fr.node.ID)
 		if err != nil {
 			result.Errors = append(result.Errors, fr.node.ID+": "+err.Error())
+			requeuePush()
 			continue
 		}
 		// 记录本节点用户列表（用于后续补全跨节点重下发，避免事后再查 DB）
@@ -266,6 +282,7 @@ func SyncUsageWith(ctx context.Context, store users.Store, nodeStore nodes.Store
 		userMap, err := store.GetUsersByIDs(nodeUIDs)
 		if err != nil {
 			result.Errors = append(result.Errors, fr.node.ID+": "+err.Error())
+			requeuePush()
 			continue
 		}
 
@@ -273,6 +290,7 @@ func SyncUsageWith(ctx context.Context, store users.Store, nodeStore nodes.Store
 		nodeInbounds, err := ibStore.ListInboundsByNode(fr.node.ID)
 		if err != nil {
 			result.Errors = append(result.Errors, fr.node.ID+": list inbounds: "+err.Error())
+			requeuePush()
 			continue
 		}
 		ibRateByTag := make(map[string]float64, len(nodeInbounds))
@@ -520,7 +538,8 @@ func SyncUsageWith(ctx context.Context, store users.Store, nodeStore nodes.Store
 }
 
 // tryDeltaUsers 通过 AddUser/RemoveUser 对节点做增量用户变更，避免全量重启。
-// 返回 true 表示全部操作成功；返回 false 时调用方应回退到全量 Restart。
+// 返回 true 表示本节点实际执行了至少一次变更且全部成功；
+// 返回 false 时调用方应回退到全量 Restart（含「无需变更」——避免空成功短路恢复下发）。
 func tryDeltaUsers(
 	ctx context.Context,
 	client *nodes.Client,
@@ -535,6 +554,7 @@ func tryDeltaUsers(
 		ibByID[ib.ID] = ib
 	}
 
+	ops := 0
 	for _, acc := range nodeAccesses {
 		newEnabled, changed := changedUsers[acc.UserID]
 		if !changed {
@@ -568,25 +588,35 @@ func tryDeltaUsers(
 			if secret == "" {
 				secret = acc.Secret
 			}
+			password := secret
+			if ib.Protocol == "shadowsocks" {
+				method := ib.Method
+				if method == "" || !strings.HasPrefix(method, "2022-") {
+					method = "2022-blake3-aes-128-gcm"
+				}
+				password = proxycfg.SSUserPassword(secret, method)
+			}
 			if err := client.AddUser(ctx, nodes.UserChangeRequest{
 				InboundTag: tag,
 				Protocol:   ib.Protocol,
 				Email:      email,
 				UUID:       uuid,
-				Password:   secret,
+				Password:   password,
 				Flow:       flow,
 			}); err != nil {
 				log.Printf("warn: delta AddUser %s on %s: %v — falling back to restart", email, tag, err)
 				return false
 			}
+			ops++
 		} else {
 			if err := client.RemoveUser(ctx, tag, email); err != nil {
 				log.Printf("warn: delta RemoveUser %s on %s: %v — falling back to restart", email, tag, err)
 				return false
 			}
+			ops++
 		}
 	}
-	return true
+	return ops > 0
 }
 
 // ─── ActivateExpiredOnHold ────────────────────────────────────────────────────

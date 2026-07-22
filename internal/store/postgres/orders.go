@@ -116,6 +116,37 @@ func (s *OrderStore) ClaimInvoice(orderID, invoiceID string) (bool, error) {
 	return result.RowsAffected() > 0, nil
 }
 
+func (s *OrderStore) UnclaimInvoice(orderID, invoiceID string) error {
+	_, err := sqlcgen.New(s.db).UnclaimInvoice(context.Background(), sqlcgen.UnclaimInvoiceParams{
+		ID:            orderID,
+		LastInvoiceID: invoiceID,
+	})
+	if err != nil {
+		return fmt.Errorf("unclaim invoice: %w", err)
+	}
+	return nil
+}
+
+func (s *OrderStore) ClaimOrderPaid(orderID string, paidAt time.Time) (bool, error) {
+	paidStr := paidAt.UTC().Format(time.RFC3339Nano)
+	result, err := sqlcgen.New(s.db).ClaimOrderPaid(context.Background(), sqlcgen.ClaimOrderPaidParams{
+		PaidAt: &paidStr,
+		ID:     orderID,
+	})
+	if err != nil {
+		return false, fmt.Errorf("claim order paid: %w", err)
+	}
+	return result.RowsAffected() > 0, nil
+}
+
+func (s *OrderStore) RevertOrderToPending(orderID string) error {
+	_, err := sqlcgen.New(s.db).RevertOrderToPending(context.Background(), orderID)
+	if err != nil {
+		return fmt.Errorf("revert order to pending: %w", err)
+	}
+	return nil
+}
+
 func (s *OrderStore) DeleteOrder(id string) error {
 	result, err := sqlcgen.New(s.db).DeleteOrderByID(context.Background(), id)
 	if err != nil {

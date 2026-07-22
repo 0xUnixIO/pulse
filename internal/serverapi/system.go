@@ -18,19 +18,21 @@ type systemAPI struct {
 	nodes         nodes.Store
 	inboundStore  inbounds.InboundStore
 	outboundStore outbounds.Store
-	base          *API
+	dial          jobs.NodeDialer
+	usageBuf      *nodes.UsageBuffer
 	applyOpts     jobs.ApplyOptions
 }
 
 // RegisterSystemAPIWithInbounds 注册 system API（含 inboundStore，用于流量同步）。
-func RegisterSystemAPIWithInbounds(mux *http.ServeMux, usersStore users.Store, nodesStore nodes.Store, ibStore inbounds.InboundStore, applyOpts jobs.ApplyOptions) {
-	base := New(nodesStore)
+// dial / usageBuf 应与定时 SyncUsage 共用，避免手动同步绕过 buffer 导致双计。
+func RegisterSystemAPIWithInbounds(mux *http.ServeMux, usersStore users.Store, nodesStore nodes.Store, ibStore inbounds.InboundStore, applyOpts jobs.ApplyOptions, dial jobs.NodeDialer, usageBuf *nodes.UsageBuffer) {
 	api := &systemAPI{
 		users:         usersStore,
 		nodes:         nodesStore,
 		inboundStore:  ibStore,
-		outboundStore: nil, // 调用方可通过 RegisterSystemAPIWithInboundsAndOutbounds 传入
-		base:          base,
+		outboundStore: nil,
+		dial:          dial,
+		usageBuf:      usageBuf,
 		applyOpts:     applyOpts,
 	}
 	mux.HandleFunc("/v1/system/sync-usage", api.handleSyncUsage)
@@ -45,11 +47,15 @@ func (a *systemAPI) handleSyncUsage(w http.ResponseWriter, r *http.Request) {
 		internalError(w, r, errors.New("inbound store not configured"))
 		return
 	}
+	if a.dial == nil {
+		internalError(w, r, errors.New("node dialer not configured"))
+		return
+	}
 
 	ctx, cancel := context.WithTimeout(r.Context(), 20*time.Second)
 	defer cancel()
 
-	result, err := jobs.SyncUsage(ctx, a.users, a.nodes, a.inboundStore, a.base.Dial, a.applyOpts, a.outboundStore)
+	result, err := jobs.SyncUsageWith(ctx, a.users, a.nodes, a.inboundStore, a.dial, a.applyOpts, a.outboundStore, a.usageBuf)
 	if err != nil {
 		writeJSON(w, http.StatusBadGateway, map[string]any{"error": err.Error()})
 		return

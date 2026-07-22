@@ -29,6 +29,22 @@ func deriveSecret(secret string, keyLen int) string {
 	return base64.StdEncoding.EncodeToString(key)
 }
 
+// SSUserPassword 返回 shadowsocks 热增/全量配置共用的用户 PSK。
+// method 为 2022-* 且 secret 非空时做 HMAC 派生，否则回退原始 secret。
+func SSUserPassword(userSecret, method string) string {
+	if userSecret == "" {
+		return userSecret
+	}
+	if !strings.HasPrefix(method, "2022-") {
+		return userSecret
+	}
+	keyLen := 16
+	if strings.Contains(method, "256") || strings.Contains(method, "chacha20") {
+		keyLen = 32
+	}
+	return deriveSecret(userSecret, keyLen)
+}
+
 // NodeInboundPrefix 是路由规则中节点 inbound 出口 ID 的前缀。
 const NodeInboundPrefix = "nodeib:"
 
@@ -478,17 +494,7 @@ func BuildXrayConfig(nodeInbounds []inbounds.Inbound, userAccesses []users.UserI
 				}
 				email := u.Username + UserInboundSep + tag
 				// SS 2022 密钥从全局 Secret 派生，保证跨节点一致
-				userSecret := u.Secret
-				keyLen := 16
-				if strings.Contains(method, "256") || strings.Contains(method, "chacha20") {
-					keyLen = 32
-				}
-				var psk string
-				if strings.HasPrefix(ib.Method, "2022-") && userSecret != "" {
-					psk = deriveSecret(userSecret, keyLen)
-				} else {
-					psk = userSecret
-				}
+				psk := SSUserPassword(u.Secret, method)
 				clients = append(clients, xrayClient{
 					Password: psk,
 					Email:    email,

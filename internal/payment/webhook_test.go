@@ -51,7 +51,15 @@ func (s *fakeOrderStore) GetOrderByStripeSubscription(subscriptionID string) (or
 
 func (s *fakeOrderStore) ListOrders() ([]orders.Order, error) { return nil, nil }
 
-func (s *fakeOrderStore) ListOrdersByUser(userID string) ([]orders.Order, error) { return nil, nil }
+func (s *fakeOrderStore) ListOrdersByUser(userID string) ([]orders.Order, error) {
+	var out []orders.Order
+	for _, o := range s.orders {
+		if o.UserID == userID {
+			out = append(out, o)
+		}
+	}
+	return out, nil
+}
 
 func (s *fakeOrderStore) ListOrdersByEmail(email string) ([]orders.Order, error) { return nil, nil }
 
@@ -61,6 +69,33 @@ func (s *fakeOrderStore) DeleteOrder(id string) error {
 }
 
 func (s *fakeOrderStore) ClaimInvoice(orderID, invoiceID string) (bool, error) { return true, nil }
+
+func (s *fakeOrderStore) UnclaimInvoice(orderID, invoiceID string) error { return nil }
+
+func (s *fakeOrderStore) ClaimOrderPaid(orderID string, paidAt time.Time) (bool, error) {
+	o, ok := s.orders[orderID]
+	if !ok {
+		return false, orders.ErrOrderNotFound
+	}
+	if o.Status != orders.StatusPending {
+		return false, nil
+	}
+	o.Status = orders.StatusPaid
+	o.PaidAt = &paidAt
+	s.orders[orderID] = o
+	return true, nil
+}
+
+func (s *fakeOrderStore) RevertOrderToPending(orderID string) error {
+	o, ok := s.orders[orderID]
+	if !ok {
+		return orders.ErrOrderNotFound
+	}
+	o.Status = orders.StatusPending
+	o.PaidAt = nil
+	s.orders[orderID] = o
+	return nil
+}
 
 // fakePlanStore 是 plans.Store 的最小内存实现，仅供本测试使用。
 type fakePlanStore struct {
@@ -95,6 +130,45 @@ func (s *fakePlanStore) IncrementStockSold(planID string) (bool, error) { return
 func (s *fakePlanStore) DeletePlan(id string) error {
 	delete(s.plans, id)
 	return nil
+}
+
+// TestClaimOrderPaid_ConcurrentOnlyOneWins 验证 checkout claim 原子性。
+func TestClaimOrderPaid_ConcurrentOnlyOneWins(t *testing.T) {
+	s := newFakeOrderStore()
+	_, _ = s.UpsertOrder(orders.Order{ID: "o1", Status: orders.StatusPending})
+	now := time.Now().UTC()
+	ok1, err := s.ClaimOrderPaid("o1", now)
+	if err != nil || !ok1 {
+		t.Fatalf("first claim: ok=%v err=%v", ok1, err)
+	}
+	ok2, err := s.ClaimOrderPaid("o1", now)
+	if err != nil {
+		t.Fatalf("second claim err: %v", err)
+	}
+	if ok2 {
+		t.Fatal("second claim must fail (already paid)")
+	}
+}
+
+// TestUserHasOtherPaidSubscription 换购后旧 sub 删除不应误判无其它订阅。
+func TestUserHasOtherPaidSubscription(t *testing.T) {
+	s := newFakeOrderStore()
+	_, _ = s.UpsertOrder(orders.Order{
+		ID: "old", UserID: "u1", Status: orders.StatusPaid, StripeSubscriptionID: "sub_old",
+	})
+	_, _ = s.UpsertOrder(orders.Order{
+		ID: "new", UserID: "u1", Status: orders.StatusPaid, StripeSubscriptionID: "sub_new",
+	})
+	deps := &WebhookDeps{OrderStore: s}
+	if !deps.userHasOtherPaidSubscription("u1", "sub_old") {
+		t.Fatal("excluding sub_old: sub_new should still count")
+	}
+	if !deps.userHasOtherPaidSubscription("u1", "sub_new") {
+		t.Fatal("excluding sub_new: sub_old should still count")
+	}
+	if deps.userHasOtherPaidSubscription("u1", "sub_old") && deps.userHasOtherPaidSubscription("u1", "sub_new") {
+		// both directions have the other sub — good
+	}
 }
 
 // TestProvisionNewUser_GeneratesVlessCredentials 复现新用户通过购买套餐开通后

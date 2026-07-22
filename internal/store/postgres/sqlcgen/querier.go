@@ -15,6 +15,7 @@ type Querier interface {
 	AddNodeTraffic(ctx context.Context, arg AddNodeTrafficParams) error
 	AddUserGroupMember(ctx context.Context, arg AddUserGroupMemberParams) error
 	ClaimInvoice(ctx context.Context, arg ClaimInvoiceParams) (pgconn.CommandTag, error)
+	ClaimOrderPaid(ctx context.Context, arg ClaimOrderPaidParams) (pgconn.CommandTag, error)
 	CleanupExpiredEnrollTokens(ctx context.Context, expiresAt time.Time) (pgconn.CommandTag, error)
 	ClearAllHostExclusionsByUser(ctx context.Context, userID string) error
 	ClearHostExclusion(ctx context.Context, arg ClearHostExclusionParams) error
@@ -136,10 +137,12 @@ type Querier interface {
 	ListUserNodeUsage(ctx context.Context, userID string) ([]ListUserNodeUsageRow, error)
 	ListUsers(ctx context.Context) ([]User, error)
 	RemoveUserGroupMember(ctx context.Context, arg RemoveUserGroupMemberParams) error
+	RevertOrderToPending(ctx context.Context, id string) (pgconn.CommandTag, error)
 	SetHostExclusion(ctx context.Context, arg SetHostExclusionParams) error
 	SetUserCredentials(ctx context.Context, arg SetUserCredentialsParams) error
 	// 插入后调用，保留每个用户最近 $2 条，超出部分按 id 升序删除（即最旧的先删）
 	TrimSubAccessLogsByUser(ctx context.Context, arg TrimSubAccessLogsByUserParams) error
+	UnclaimInvoice(ctx context.Context, arg UnclaimInvoiceParams) (pgconn.CommandTag, error)
 	UpdateAnnouncement(ctx context.Context, arg UpdateAnnouncementParams) error
 	UpdateIPSentinelRun(ctx context.Context, arg UpdateIPSentinelRunParams) error
 	UpdateNodeDomainNode(ctx context.Context, arg UpdateNodeDomainNodeParams) (NodeDomain, error)

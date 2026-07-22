@@ -7,6 +7,7 @@ import (
 
 	"github.com/stripe/stripe-go/v83"
 
+	"pulse/internal/jobs"
 	"pulse/internal/orders"
 	"pulse/internal/users"
 )
@@ -62,16 +63,23 @@ func SyncSubscriptions(ctx context.Context, sg SettingsGetter, envSecretKey stri
 				log.Printf("sync-stripe: update order %s: %v", order.ID, err)
 			}
 			if order.UserID != "" {
-				user, err := userStore.GetUser(order.UserID)
-				if err == nil && user.Status == users.StatusActive {
-					user.Status = users.StatusDisabled
-					user.CurrentPlanID = ""
-					if _, err := userStore.UpsertUser(user); err != nil {
-						log.Printf("sync-stripe: disable user %s: %v", user.ID, err)
-					} else {
-						log.Printf("sync-stripe: disabled user %s (subscription %s cancelled)", user.Username, order.StripeSubscriptionID)
-					}
+				// 若用户还有其它 paid 订阅订单，不禁用
+				if hasOtherPaidSub(orderStore, order.UserID, order.StripeSubscriptionID) {
+					log.Printf("sync-stripe: skip disable user %s — other paid subscription remains", order.UserID)
+					continue
 				}
+				jobs.WithUserLock(func() {
+					user, err := userStore.GetUser(order.UserID)
+					if err == nil && user.Status == users.StatusActive {
+						user.Status = users.StatusDisabled
+						user.CurrentPlanID = ""
+						if _, err := userStore.UpsertUser(user); err != nil {
+							log.Printf("sync-stripe: disable user %s: %v", user.ID, err)
+						} else {
+							log.Printf("sync-stripe: disabled user %s (subscription %s cancelled)", user.Username, order.StripeSubscriptionID)
+						}
+					}
+				})
 			}
 
 		case stripe.SubscriptionStatusPastDue:
@@ -89,15 +97,34 @@ func SyncSubscriptions(ctx context.Context, sg SettingsGetter, envSecretKey stri
 			}
 			if periodEnd > 0 && order.UserID != "" {
 				newExpiry := time.Unix(periodEnd, 0).UTC()
-				user, err := userStore.GetUser(order.UserID)
-				if err == nil && (user.ExpireAt == nil || !user.ExpireAt.Equal(newExpiry)) {
-					user.ExpireAt = &newExpiry
-					if _, err := userStore.UpsertUser(user); err != nil {
-						log.Printf("sync-stripe: update expiry for user %s: %v", user.ID, err)
+				jobs.WithUserLock(func() {
+					user, err := userStore.GetUser(order.UserID)
+					if err == nil && (user.ExpireAt == nil || !user.ExpireAt.Equal(newExpiry)) {
+						user.ExpireAt = &newExpiry
+						if _, err := userStore.UpsertUser(user); err != nil {
+							log.Printf("sync-stripe: update expiry for user %s: %v", user.ID, err)
+						}
 					}
-				}
+				})
 			}
 		}
 	}
 	return nil
+}
+
+func hasOtherPaidSub(orderStore orders.Store, userID, exceptSubID string) bool {
+	list, err := orderStore.ListOrdersByUser(userID)
+	if err != nil {
+		return false
+	}
+	for _, o := range list {
+		if o.Status != orders.StatusPaid || o.StripeSubscriptionID == "" {
+			continue
+		}
+		if exceptSubID != "" && o.StripeSubscriptionID == exceptSubID {
+			continue
+		}
+		return true
+	}
+	return false
 }

@@ -58,5 +58,17 @@ FROM orders WHERE email = $1 ORDER BY created_at DESC;
 UPDATE orders SET last_invoice_id = $1
 WHERE id = $2 AND COALESCE(last_invoice_id, '') != $1;
 
+-- name: UnclaimInvoice :execresult
+UPDATE orders SET last_invoice_id = ''
+WHERE id = $1 AND last_invoice_id = $2;
+
+-- name: ClaimOrderPaid :execresult
+UPDATE orders SET status = 'paid', paid_at = $1
+WHERE id = $2 AND status = 'pending';
+
+-- name: RevertOrderToPending :execresult
+UPDATE orders SET status = 'pending', paid_at = NULL
+WHERE id = $1 AND status = 'paid';
+
 -- name: DeleteOrderByID :execresult
 DELETE FROM orders WHERE id = $1;

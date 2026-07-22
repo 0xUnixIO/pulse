@@ -13,6 +13,7 @@ import (
 
 	"github.com/stripe/stripe-go/v83"
 	"pulse/internal/idgen"
+	"pulse/internal/jobs"
 	"pulse/internal/orders"
 	"pulse/internal/plans"
 	"pulse/internal/users"
@@ -89,6 +90,16 @@ func (d *WebhookDeps) handleCheckoutCompleted(event stripe.Event) {
 	}
 
 	now := time.Now().UTC()
+	// 原子 claim：仅 pending → paid，防止 Stripe 并发/重投双开用户或双倍续费。
+	claimed, err := d.OrderStore.ClaimOrderPaid(order.ID, now)
+	if err != nil {
+		log.Printf("payment: claim order %s: %v", order.ID, err)
+		return
+	}
+	if !claimed {
+		return
+	}
+
 	order.Status = orders.StatusPaid
 	order.PaidAt = &now
 	order.StripeSessionID = sess.ID
@@ -102,6 +113,9 @@ func (d *WebhookDeps) handleCheckoutCompleted(event stripe.Event) {
 	plan, err := d.PlanStore.GetPlan(order.PlanID)
 	if err != nil {
 		log.Printf("payment: get plan %s: %v", order.PlanID, err)
+		if revErr := d.OrderStore.RevertOrderToPending(order.ID); revErr != nil {
+			log.Printf("payment: revert order %s after plan error: %v", order.ID, revErr)
+		}
 		return
 	}
 
@@ -109,21 +123,25 @@ func (d *WebhookDeps) handleCheckoutCompleted(event stripe.Event) {
 		// 新用户：从 shop 购买
 		if err := d.provisionNewUser(&order, plan, now); err != nil {
 			log.Printf("payment: provision user for order %s: %v", order.ID, err)
-			// 不更新订单状态，保留 pending 以便 webhook 重试可重新处理
+			if revErr := d.OrderStore.RevertOrderToPending(order.ID); revErr != nil {
+				log.Printf("payment: revert order %s after provision error: %v", order.ID, revErr)
+			}
 			return
 		}
 	} else {
 		// 已有用户续费
 		if err := d.renewExistingUser(order, plan, now); err != nil {
 			log.Printf("payment: renew user for order %s: %v", order.ID, err)
-			// 不标记为 paid，保留 pending 以便 Stripe 重试时重新处理
+			if revErr := d.OrderStore.RevertOrderToPending(order.ID); revErr != nil {
+				log.Printf("payment: revert order %s after renew error: %v", order.ID, revErr)
+			}
 			return
 		}
 	}
 
 	if _, err := d.OrderStore.UpsertOrder(order); err != nil {
-		log.Printf("payment: update order %s to paid: %v — MANUAL ACTION REQUIRED", order.ID, err)
-		return
+		log.Printf("payment: update order %s details: %v — order already claimed paid; MANUAL ACTION may be required", order.ID, err)
+		// 履约已成功，不 revert（避免重复 provision）；仅日志告警
 	}
 
 	// 原子递增库存（超卖时只打日志，不回滚已完成的付款）
@@ -157,21 +175,26 @@ func (d *WebhookDeps) provisionNewUser(order *orders.Order, plan plans.Plan, now
 	}
 
 	// 直接依赖数据库 UNIQUE 约束拒绝冲突，最多重试 3 次追加随机后缀，消除 TOCTOU 竞态。
+	// 与 SyncUsage 共用用户写锁，避免并发全字段 Upsert 覆盖。
 	var createErr error
-	for attempt := 0; attempt < 3; attempt++ {
-		if attempt > 0 {
-			newUser.Username = baseUsername + "-" + randomHex(3)
+	jobs.WithUserLock(func() {
+		for attempt := 0; attempt < 3; attempt++ {
+			if attempt > 0 {
+				newUser.Username = baseUsername + "-" + randomHex(3)
+			}
+			_, createErr = d.UserStore.UpsertUser(newUser)
+			if createErr == nil {
+				return
+			}
+			if !errors.Is(createErr, users.ErrUsernameTaken) {
+				createErr = fmt.Errorf("create user: %w", createErr)
+				return
+			}
 		}
-		_, createErr = d.UserStore.UpsertUser(newUser)
-		if createErr == nil {
-			break
-		}
-		if !errors.Is(createErr, users.ErrUsernameTaken) {
-			return fmt.Errorf("create user: %w", createErr)
-		}
-	}
+		createErr = fmt.Errorf("create user after retries (username conflict): %w", createErr)
+	})
 	if createErr != nil {
-		return fmt.Errorf("create user after retries (username conflict): %w", createErr)
+		return createErr
 	}
 
 	order.UserID = newUser.ID
@@ -196,66 +219,76 @@ func (d *WebhookDeps) provisionNewUser(order *orders.Order, plan plans.Plan, now
 }
 
 func (d *WebhookDeps) renewExistingUser(order orders.Order, plan plans.Plan, now time.Time) error {
-	user, err := d.UserStore.GetUser(order.UserID)
-	if err != nil {
-		return fmt.Errorf("get user %s: %w", order.UserID, err)
-	}
-
-	// 到期时间：未过期则从当前到期时间延长，已过期则从现在起算
-	notExpired := user.ExpireAt != nil && user.ExpireAt.After(now)
-	base := now
-	if notExpired {
-		base = *user.ExpireAt
-	}
-	expireAt := base.Add(time.Duration(plan.DurationDays) * 24 * time.Hour)
-	user.ExpireAt = &expireAt
-
-	// 流量：剩余量叠加到新套餐额度，清零计数器以保证 SyncUsage delta 正确
-	user.PlanTrafficLimit = plan.TrafficLimit
-	if plan.TrafficLimit == 0 {
-		user.TrafficLimit = 0 // 新套餐无限流量
-	} else {
-		remaining := user.TrafficLimit - user.UsedBytes
-		if remaining < 0 {
-			remaining = 0
+	var renewErr error
+	jobs.WithUserLock(func() {
+		user, err := d.UserStore.GetUser(order.UserID)
+		if err != nil {
+			renewErr = fmt.Errorf("get user %s: %w", order.UserID, err)
+			return
 		}
-		user.TrafficLimit = remaining + plan.TrafficLimit
-	}
-	user.UploadBytes = 0
-	user.DownloadBytes = 0
-	user.UsedBytes = 0
-	user.RawUploadBytes = 0
-	user.RawDownloadBytes = 0
-	// 未过期续费时以旧 ExpireAt 为锚点，确保下次定时重置与套餐周期对齐
-	if notExpired {
-		user.LastTrafficResetAt = user.ExpireAt
-	} else {
-		user.LastTrafficResetAt = &now
-	}
-	user.DataLimitResetStrategy = plan.DataLimitResetStrategy
-	user.CurrentPlanID = plan.ID
-	user.Status = users.StatusActive
 
-	if _, err := d.UserStore.UpsertUser(user); err != nil {
-		return fmt.Errorf("update user %s: %w", user.ID, err)
-	}
-	if err := d.UserStore.ClearUserNodeDailyUsage(user.ID); err != nil {
-		log.Printf("payment: renew clear daily usage user %s: %v", user.ID, err)
+		// 到期时间：未过期则从当前到期时间延长，已过期则从现在起算
+		notExpired := user.ExpireAt != nil && user.ExpireAt.After(now)
+		base := now
+		if notExpired {
+			base = *user.ExpireAt
+		}
+		expireAt := base.Add(time.Duration(plan.DurationDays) * 24 * time.Hour)
+		user.ExpireAt = &expireAt
+
+		// 流量：剩余量叠加到新套餐额度，清零计数器以保证 SyncUsage delta 正确
+		user.PlanTrafficLimit = plan.TrafficLimit
+		if plan.TrafficLimit == 0 {
+			user.TrafficLimit = 0 // 新套餐无限流量
+		} else {
+			remaining := user.TrafficLimit - user.UsedBytes
+			if remaining < 0 {
+				remaining = 0
+			}
+			user.TrafficLimit = remaining + plan.TrafficLimit
+		}
+		user.UploadBytes = 0
+		user.DownloadBytes = 0
+		user.UsedBytes = 0
+		user.RawUploadBytes = 0
+		user.RawDownloadBytes = 0
+		// 未过期续费时以旧 ExpireAt 为锚点，确保下次定时重置与套餐周期对齐
+		if notExpired {
+			user.LastTrafficResetAt = user.ExpireAt
+		} else {
+			user.LastTrafficResetAt = &now
+		}
+		user.DataLimitResetStrategy = plan.DataLimitResetStrategy
+		user.CurrentPlanID = plan.ID
+		user.Status = users.StatusActive
+
+		if _, err := d.UserStore.UpsertUser(user); err != nil {
+			renewErr = fmt.Errorf("update user %s: %w", user.ID, err)
+			return
+		}
+		if err := d.UserStore.ClearUserNodeDailyUsage(user.ID); err != nil {
+			log.Printf("payment: renew clear daily usage user %s: %v", user.ID, err)
+		}
+	})
+	if renewErr != nil {
+		return renewErr
 	}
 
-	// 加入套餐绑定的用户组
+	// 加入套餐绑定的用户组（网络/多写，放在用户锁外）
 	if plan.UserGroupIDs != "" {
 		gIDs := strings.Split(plan.UserGroupIDs, ",")
 		for i := range gIDs {
 			gIDs[i] = strings.TrimSpace(gIDs[i])
 		}
-		if err := d.AddUserToGroups(user.ID, gIDs); err != nil {
-			log.Printf("payment: renew add user to groups: %v", err)
+		if d.AddUserToGroups != nil {
+			if err := d.AddUserToGroups(order.UserID, gIDs); err != nil {
+				log.Printf("payment: renew add user to groups: %v", err)
+			}
 		}
 	}
 	// 无论组操作结果如何，统一触发节点下发（流量/到期已变更）
 	if d.ApplyUserNodes != nil {
-		go d.ApplyUserNodes(user.ID)
+		go d.ApplyUserNodes(order.UserID)
 	}
 
 	return nil
@@ -290,6 +323,7 @@ func (d *WebhookDeps) handleInvoicePaid(event stripe.Event) {
 	}
 
 	// 幂等性：原子地认领 invoice，防止并发重试导致双倍续费（Stripe 保证至少一次投递）。
+	claimedInvoice := ""
 	if invoice.ID != "" {
 		claimed, err := d.OrderStore.ClaimInvoice(order.ID, invoice.ID)
 		if err != nil {
@@ -300,53 +334,71 @@ func (d *WebhookDeps) handleInvoicePaid(event stripe.Event) {
 			log.Printf("payment: invoice %s already processed for order %s, skipping", invoice.ID, order.ID)
 			return
 		}
+		claimedInvoice = invoice.ID
 	}
 
 	plan, err := d.PlanStore.GetPlan(order.PlanID)
 	if err != nil {
 		log.Printf("payment: get plan %s for invoice: %v", order.PlanID, err)
-		return
-	}
-
-	user, err := d.UserStore.GetUser(order.UserID)
-	if err != nil {
-		log.Printf("payment: get user %s for invoice: %v", order.UserID, err)
-		return
-	}
-
-	now := time.Now().UTC()
-	base := now
-	if user.ExpireAt != nil && user.ExpireAt.After(now) {
-		base = *user.ExpireAt
-	}
-	expireAt := base.Add(time.Duration(plan.DurationDays) * 24 * time.Hour)
-	user.ExpireAt = &expireAt
-	user.Status = users.StatusActive
-
-	// 流量：剩余量叠加到套餐额度，清零计数器以保证 SyncUsage delta 正确
-	user.PlanTrafficLimit = plan.TrafficLimit
-	if plan.TrafficLimit == 0 {
-		user.TrafficLimit = 0 // 套餐无限流量
-	} else {
-		remaining := user.TrafficLimit - user.UsedBytes
-		if remaining < 0 {
-			remaining = 0
+		if claimedInvoice != "" {
+			_ = d.OrderStore.UnclaimInvoice(order.ID, claimedInvoice)
 		}
-		user.TrafficLimit = remaining + plan.TrafficLimit
-	}
-	user.UploadBytes = 0
-	user.DownloadBytes = 0
-	user.UsedBytes = 0
-	user.RawUploadBytes = 0
-	user.RawDownloadBytes = 0
-
-	if _, err := d.UserStore.UpsertUser(user); err != nil {
-		log.Printf("payment: update user %s for invoice: %v — MANUAL ACTION REQUIRED", user.ID, err)
 		return
 	}
 
-	if d.ApplyUserNodes != nil {
-		go d.ApplyUserNodes(user.ID)
+	var fulfillErr error
+	var userID string
+	jobs.WithUserLock(func() {
+		user, err := d.UserStore.GetUser(order.UserID)
+		if err != nil {
+			fulfillErr = fmt.Errorf("get user %s: %w", order.UserID, err)
+			return
+		}
+		userID = user.ID
+
+		now := time.Now().UTC()
+		base := now
+		if user.ExpireAt != nil && user.ExpireAt.After(now) {
+			base = *user.ExpireAt
+		}
+		expireAt := base.Add(time.Duration(plan.DurationDays) * 24 * time.Hour)
+		user.ExpireAt = &expireAt
+		user.Status = users.StatusActive
+
+		// 流量：剩余量叠加到套餐额度，清零计数器以保证 SyncUsage delta 正确
+		user.PlanTrafficLimit = plan.TrafficLimit
+		if plan.TrafficLimit == 0 {
+			user.TrafficLimit = 0 // 套餐无限流量
+		} else {
+			remaining := user.TrafficLimit - user.UsedBytes
+			if remaining < 0 {
+				remaining = 0
+			}
+			user.TrafficLimit = remaining + plan.TrafficLimit
+		}
+		user.UploadBytes = 0
+		user.DownloadBytes = 0
+		user.UsedBytes = 0
+		user.RawUploadBytes = 0
+		user.RawDownloadBytes = 0
+
+		if _, err := d.UserStore.UpsertUser(user); err != nil {
+			fulfillErr = fmt.Errorf("update user %s: %w", user.ID, err)
+			return
+		}
+	})
+	if fulfillErr != nil {
+		log.Printf("payment: fulfill invoice %s: %v", invoice.ID, fulfillErr)
+		if claimedInvoice != "" {
+			if err := d.OrderStore.UnclaimInvoice(order.ID, claimedInvoice); err != nil {
+				log.Printf("payment: unclaim invoice %s after fulfill error: %v — MANUAL ACTION REQUIRED", claimedInvoice, err)
+			}
+		}
+		return
+	}
+
+	if d.ApplyUserNodes != nil && userID != "" {
+		go d.ApplyUserNodes(userID)
 	}
 }
 
@@ -370,19 +422,11 @@ func (d *WebhookDeps) handleInvoicePaymentFailed(event stripe.Event) {
 		if order.UserID == "" {
 			return
 		}
-		user, err := d.UserStore.GetUser(order.UserID)
-		if err != nil {
-			log.Printf("payment: get user %s for payment failed: %v", order.UserID, err)
+		if d.userHasOtherPaidSubscription(order.UserID, invoice.Subscription) {
+			log.Printf("payment: skip on_hold user %s — other paid subscription still present", order.UserID)
 			return
 		}
-		user.Status = users.StatusOnHold
-		if _, err := d.UserStore.UpsertUser(user); err != nil {
-			log.Printf("payment: set user %s on_hold: %v", user.ID, err)
-			return
-		}
-		if d.ApplyUserNodes != nil {
-			go d.ApplyUserNodes(user.ID)
-		}
+		d.setUserStatus(order.UserID, users.StatusOnHold)
 		return
 	}
 
@@ -395,13 +439,26 @@ func (d *WebhookDeps) handleInvoicePaymentFailed(event stripe.Event) {
 		log.Printf("payment: get user by customer %s: %v", invoice.Customer, err)
 		return
 	}
-	user.Status = users.StatusOnHold
-	if _, err := d.UserStore.UpsertUser(user); err != nil {
-		log.Printf("payment: set user %s on_hold: %v", user.ID, err)
-		return
-	}
-	if d.ApplyUserNodes != nil {
-		go d.ApplyUserNodes(user.ID)
+	d.setUserStatus(user.ID, users.StatusOnHold)
+}
+
+func (d *WebhookDeps) setUserStatus(userID, status string) {
+	var applyID string
+	jobs.WithUserLock(func() {
+		user, err := d.UserStore.GetUser(userID)
+		if err != nil {
+			log.Printf("payment: get user %s for status %s: %v", userID, status, err)
+			return
+		}
+		user.Status = status
+		if _, err := d.UserStore.UpsertUser(user); err != nil {
+			log.Printf("payment: set user %s status %s: %v", user.ID, status, err)
+			return
+		}
+		applyID = user.ID
+	})
+	if applyID != "" && d.ApplyUserNodes != nil {
+		go d.ApplyUserNodes(applyID)
 	}
 }
 
@@ -425,19 +482,11 @@ func (d *WebhookDeps) handleSubscriptionDeleted(event stripe.Event) {
 		if order.UserID == "" {
 			return
 		}
-		user, err := d.UserStore.GetUser(order.UserID)
-		if err != nil {
-			log.Printf("payment: get user %s for subscription deleted: %v", order.UserID, err)
+		if d.userHasOtherPaidSubscription(order.UserID, sub.ID) {
+			log.Printf("payment: skip disable user %s — other paid subscription still present", order.UserID)
 			return
 		}
-		user.Status = users.StatusDisabled
-		if _, err := d.UserStore.UpsertUser(user); err != nil {
-			log.Printf("payment: disable user %s: %v", user.ID, err)
-			return
-		}
-		if d.ApplyUserNodes != nil {
-			go d.ApplyUserNodes(user.ID)
-		}
+		d.disableUser(order.UserID)
 		return
 	}
 
@@ -450,13 +499,54 @@ func (d *WebhookDeps) handleSubscriptionDeleted(event stripe.Event) {
 		log.Printf("payment: get user by customer %s: %v", sub.Customer, err)
 		return
 	}
-	user.Status = users.StatusDisabled
-	if _, err := d.UserStore.UpsertUser(user); err != nil {
-		log.Printf("payment: disable user %s: %v", user.ID, err)
+	// 无具体 sub id 时，若用户仍有任意 paid 订阅订单则不禁用
+	if d.userHasOtherPaidSubscription(user.ID, "") {
+		log.Printf("payment: skip disable user %s (customer fallback) — paid subscription orders remain", user.ID)
 		return
 	}
-	if d.ApplyUserNodes != nil {
-		go d.ApplyUserNodes(user.ID)
+	d.disableUser(user.ID)
+}
+
+// userHasOtherPaidSubscription 检查用户是否还有除 exceptSubID 外的已支付订阅订单。
+// exceptSubID 为空时：任意 paid 且带 subscription_id 的订单都算。
+func (d *WebhookDeps) userHasOtherPaidSubscription(userID, exceptSubID string) bool {
+	list, err := d.OrderStore.ListOrdersByUser(userID)
+	if err != nil {
+		log.Printf("payment: list orders for user %s: %v", userID, err)
+		return false
+	}
+	for _, o := range list {
+		if o.Status != orders.StatusPaid {
+			continue
+		}
+		if o.StripeSubscriptionID == "" {
+			continue
+		}
+		if exceptSubID != "" && o.StripeSubscriptionID == exceptSubID {
+			continue
+		}
+		return true
+	}
+	return false
+}
+
+func (d *WebhookDeps) disableUser(userID string) {
+	var applyID string
+	jobs.WithUserLock(func() {
+		user, err := d.UserStore.GetUser(userID)
+		if err != nil {
+			log.Printf("payment: get user %s for disable: %v", userID, err)
+			return
+		}
+		user.Status = users.StatusDisabled
+		if _, err := d.UserStore.UpsertUser(user); err != nil {
+			log.Printf("payment: disable user %s: %v", user.ID, err)
+			return
+		}
+		applyID = user.ID
+	})
+	if applyID != "" && d.ApplyUserNodes != nil {
+		go d.ApplyUserNodes(applyID)
 	}
 }
 

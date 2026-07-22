@@ -71,6 +71,38 @@ func TestUsageBuffer_DedupSameSeq(t *testing.T) {
 	}
 }
 
+// TestUsageBuffer_SeqEpochOnNodeRestart 节点重启后 seq 从低位重计，应开启新纪元并记账。
+func TestUsageBuffer_SeqEpochOnNodeRestart(t *testing.T) {
+	b := NewUsageBuffer()
+	_ = b.Append("n1", 1000, UsageStats{UploadTotal: 10})
+	_, _ = b.Drain("n1") // lastSeq 仍为 1000
+
+	// 模拟 node 重启：nextSeq 从 1 开始
+	_ = b.Append("n1", 1, UsageStats{UploadTotal: 50, Users: []UserUsage{{User: "a", UploadTotal: 50}}})
+	got, ok := b.Drain("n1")
+	if !ok {
+		t.Fatal("epoch frame should be accepted")
+	}
+	if got.UploadTotal != 50 {
+		t.Fatalf("want 50 after epoch, got %d", got.UploadTotal)
+	}
+	// 新纪元内递增正常
+	_ = b.Append("n1", 2, UsageStats{UploadTotal: 3})
+	got, _ = b.Drain("n1")
+	if got.UploadTotal != 3 {
+		t.Fatalf("want 3, got %d", got.UploadTotal)
+	}
+}
+
+func TestUsageBuffer_Requeue(t *testing.T) {
+	b := NewUsageBuffer()
+	b.Requeue("n1", UsageStats{UploadTotal: 9, Available: true})
+	got, ok := b.Drain("n1")
+	if !ok || got.UploadTotal != 9 {
+		t.Fatalf("requeue drain = %+v ok=%v", got, ok)
+	}
+}
+
 func TestUsageBuffer_UserMerge(t *testing.T) {
 	b := NewUsageBuffer()
 	_ = b.Append("n1", 1, UsageStats{

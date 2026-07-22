@@ -25,6 +25,20 @@ func (q *Queries) ClaimInvoice(ctx context.Context, arg ClaimInvoiceParams) (pgc
 	return q.db.Exec(ctx, claimInvoice, arg.LastInvoiceID, arg.ID)
 }
 
+const claimOrderPaid = `-- name: ClaimOrderPaid :execresult
+UPDATE orders SET status = 'paid', paid_at = $1
+WHERE id = $2 AND status = 'pending'
+`
+
+type ClaimOrderPaidParams struct {
+	PaidAt *string
+	ID     string
+}
+
+func (q *Queries) ClaimOrderPaid(ctx context.Context, arg ClaimOrderPaidParams) (pgconn.CommandTag, error) {
+	return q.db.Exec(ctx, claimOrderPaid, arg.PaidAt, arg.ID)
+}
+
 const deleteOrderByID = `-- name: DeleteOrderByID :execresult
 DELETE FROM orders WHERE id = $1
 `
@@ -238,6 +252,29 @@ func (q *Queries) ListOrdersByUser(ctx context.Context, userID string) ([]Order,
 		return nil, err
 	}
 	return items, nil
+}
+
+const revertOrderToPending = `-- name: RevertOrderToPending :execresult
+UPDATE orders SET status = 'pending', paid_at = NULL
+WHERE id = $1 AND status = 'paid'
+`
+
+func (q *Queries) RevertOrderToPending(ctx context.Context, id string) (pgconn.CommandTag, error) {
+	return q.db.Exec(ctx, revertOrderToPending, id)
+}
+
+const unclaimInvoice = `-- name: UnclaimInvoice :execresult
+UPDATE orders SET last_invoice_id = ''
+WHERE id = $1 AND last_invoice_id = $2
+`
+
+type UnclaimInvoiceParams struct {
+	ID            string
+	LastInvoiceID string
+}
+
+func (q *Queries) UnclaimInvoice(ctx context.Context, arg UnclaimInvoiceParams) (pgconn.CommandTag, error) {
+	return q.db.Exec(ctx, unclaimInvoice, arg.ID, arg.LastInvoiceID)
 }
 
 const upsertOrder = `-- name: UpsertOrder :exec

@@ -45,4 +45,11 @@ type Store interface {
 	// ClaimInvoice 原子地将 last_invoice_id 更新为 invoiceID（当且仅当当前值不等于 invoiceID 时）。
 	// 返回 true 表示成功认领（应继续处理），false 表示该 invoice 已被处理（应跳过）。
 	ClaimInvoice(orderID, invoiceID string) (claimed bool, err error)
+	// UnclaimInvoice 在履约失败时回滚 last_invoice_id，允许 Stripe 重投后重试。
+	UnclaimInvoice(orderID, invoiceID string) error
+	// ClaimOrderPaid 原子地将 pending 订单标记为 paid（仅 status=pending 时成功）。
+	// 返回 true 表示本实例获得履约权；false 表示已被其它并发处理。
+	ClaimOrderPaid(orderID string, paidAt time.Time) (claimed bool, err error)
+	// RevertOrderToPending 在履约失败时把已 claim 的 paid 订单退回 pending，允许重试。
+	RevertOrderToPending(orderID string) error
 }
