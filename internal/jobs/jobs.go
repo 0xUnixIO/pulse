@@ -119,14 +119,16 @@ func SyncUsage(ctx context.Context, store users.Store, nodeStore nodes.Store, ib
 }
 
 // SyncUsageWith 与 SyncUsage 相同，但额外接受 *nodes.UsageBuffer：
-// 优先消费来自 node 主动 push 的 usage delta；只有 buffer 中没有该节点数据时
-// 才回退到 c.Usage(ctx, true) 的按需 hub 拉取（兼容尚未 push 过的节点和测试）。
+// 优先按节点 Drain 消费 push delta；buffer 无数据时才回退到 c.Usage(ctx, true)。
+//
+// 记账与 dial 解耦：push 路径只要 buffer 有数据即可写库，不因 dial 失败丢弃
+// 已 push 的流量。禁用节点不参与本轮，其 buffer 帧保留到重新启用后再 Drain。
 func SyncUsageWith(ctx context.Context, store users.Store, nodeStore nodes.Store, ibStore inbounds.InboundStore, dial NodeDialer, applyOpts ApplyOptions, outboundStore outbounds.Store, usageBuf *nodes.UsageBuffer) (SyncUsageResult, error) {
 	allNodes, err := nodeStore.List()
 	if err != nil {
 		return SyncUsageResult{}, err
 	}
-	// 过滤掉已禁用的节点，禁用节点不拉取流量也不下发配置
+	// 过滤掉已禁用的节点，禁用节点不拉取流量也不下发配置（push buffer 保留）
 	nodesList := make([]nodes.Node, 0, len(allNodes))
 	for _, n := range allNodes {
 		if !n.Disabled {
@@ -134,20 +136,16 @@ func SyncUsageWith(ctx context.Context, store users.Store, nodeStore nodes.Store
 		}
 	}
 
-	// 优先 drain push buffer：所有有 push 数据的节点直接用 buffer 中的累计 delta。
-	var drained map[string]nodes.UsageStats
-	if usageBuf != nil {
-		drained = usageBuf.DrainAll()
-	}
-
 	result := SyncUsageResult{Errors: make([]string, 0)}
 	now := time.Now().UTC()
 
-	// ── 阶段 1：并发拉取各节点流量（网络 IO，不持锁） ────────────────────────
+	// ── 阶段 1：并发获取各节点流量（网络 IO，不持锁） ────────────────────────
 	type nodeFetch struct {
 		node     nodes.Node
 		client   *nodes.Client
 		usage    nodes.UsageStats
+		hasUsage bool // 是否有可记账的 usage 快照
+		fromPush bool // 来自 push buffer（记账不依赖 dial）
 		dialErr  error
 		usageErr error
 	}
@@ -157,19 +155,28 @@ func SyncUsageWith(ctx context.Context, store users.Store, nodeStore nodes.Store
 		wg.Add(1)
 		go func(idx int, n nodes.Node) {
 			defer wg.Done()
+			// 优先按节点 drain：禁用节点不在列表中，其 pending 帧不会被清掉。
+			if usageBuf != nil {
+				if u, ok := usageBuf.Drain(n.ID); ok {
+					c, dialErr := dial(n.ID) // best-effort，仅供后续配置下发
+					fetched[idx] = nodeFetch{
+						node: n, client: c, usage: u,
+						hasUsage: true, fromPush: true, dialErr: dialErr,
+					}
+					return
+				}
+			}
 			c, err := dial(n.ID)
 			if err != nil {
 				fetched[idx] = nodeFetch{node: n, dialErr: err}
 				return
 			}
-			// 优先走 push buffer：节点已 push 过 → 直接用聚合 delta。
-			if u, ok := drained[n.ID]; ok {
-				fetched[idx] = nodeFetch{node: n, client: c, usage: u}
-				return
-			}
 			// fallback：节点尚未 push 过，按需拉取。
 			u, err := c.Usage(ctx, true)
-			fetched[idx] = nodeFetch{node: n, client: c, usage: u, usageErr: err}
+			fetched[idx] = nodeFetch{
+				node: n, client: c, usage: u,
+				hasUsage: err == nil, usageErr: err,
+			}
 		}(i, node)
 	}
 	wg.Wait()
@@ -182,10 +189,10 @@ func SyncUsageWith(ctx context.Context, store users.Store, nodeStore nodes.Store
 	}
 	var pending []pendingApply
 
-	// 统计本轮失败节点数，用于判断是否为控制面网络问题（超半数同时失败则静默）。
+	// 统计本轮失败节点数：push 已到手时 dial 失败不计入「无数据失败」。
 	failedCount := 0
 	for _, fr := range fetched {
-		if fr.dialErr != nil || fr.usageErr != nil {
+		if fr.usageErr != nil || (fr.dialErr != nil && !fr.hasUsage) {
 			failedCount++
 		}
 	}
@@ -217,10 +224,13 @@ func SyncUsageWith(ctx context.Context, store users.Store, nodeStore nodes.Store
 
 		if fr.dialErr != nil {
 			result.Errors = append(result.Errors, fr.node.ID+": "+fr.dialErr.Error())
-			if !massOutage && nodeOfflineAlert(fr.node.ID) {
-				sendAlert(ctx, applyOpts.Alerter, "节点离线", fmt.Sprintf("无法连接节点 %s", fr.node.Name))
+			if !fr.hasUsage {
+				if !massOutage && nodeOfflineAlert(fr.node.ID) {
+					sendAlert(ctx, applyOpts.Alerter, "节点离线", fmt.Sprintf("无法连接节点 %s", fr.node.Name))
+				}
+				continue
 			}
-			continue
+			// push 数据已到手：继续记账，不因 dial 失败丢弃流量。
 		}
 		if fr.usageErr != nil {
 			result.Errors = append(result.Errors, fr.node.ID+": "+fr.usageErr.Error())
@@ -229,16 +239,21 @@ func SyncUsageWith(ctx context.Context, store users.Store, nodeStore nodes.Store
 			}
 			continue
 		}
-		if !fr.usage.Available {
+		if !fr.hasUsage {
+			continue
+		}
+		if !fr.usage.Available && !usageHasBytes(fr.usage) {
 			result.Errors = append(result.Errors, fr.node.ID+": V2Ray Stats not available")
-			if !fr.usage.Running {
+			if !fr.usage.Running && fr.client != nil {
 				sendAlert(ctx, applyOpts.Alerter, "节点异常", fmt.Sprintf("节点 %s xray 停止运行", fr.node.Name))
 				pending = append(pending, pendingApply{node: fr.node, client: fr.client, recover: true})
 			}
 			continue
 		}
 		result.NodesSynced++
-		nodeResetFail(fr.node.ID)
+		if fr.dialErr == nil {
+			nodeResetFail(fr.node.ID)
+		}
 
 		userAccesses, err := store.ListUserInboundsByNode(fr.node.ID)
 		if err != nil {
@@ -407,7 +422,7 @@ func SyncUsageWith(ctx context.Context, store users.Store, nodeStore nodes.Store
 			}
 		}
 
-		if reloadNeeded {
+		if reloadNeeded && fr.client != nil {
 			pending = append(pending, pendingApply{node: fr.node, client: fr.client})
 		}
 	}
@@ -1023,6 +1038,19 @@ func nodeResetFail(nodeID string) {
 	nodeFailMu.Lock()
 	delete(nodeFailCount, nodeID)
 	nodeFailMu.Unlock()
+}
+
+// usageHasBytes 判断 usage 快照是否包含可记账字节（用户或节点总量）。
+func usageHasBytes(u nodes.UsageStats) bool {
+	if u.UploadTotal > 0 || u.DownloadTotal > 0 {
+		return true
+	}
+	for _, item := range u.Users {
+		if item.UploadTotal > 0 || item.DownloadTotal > 0 {
+			return true
+		}
+	}
+	return false
 }
 
 // applyRate 将 delta 乘以倍率并防止 int64 溢出。

@@ -3,6 +3,7 @@ package jobs
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"net/http"
 	"testing"
 
@@ -143,5 +144,118 @@ func TestSyncUsage_MixedPushAndOnDemand(t *testing.T) {
 	// n1 push delta (100+200) + n2 on-demand fallback (11+22) = 333
 	if alice.UsedBytes != 333 {
 		t.Errorf("alice.UsedBytes=%d, want 333 (push n1=300 + on-demand n2=33)", alice.UsedBytes)
+	}
+}
+
+// TestSyncUsage_PushSurvivesDialError 验证 push 数据在 dial 失败时仍入账，且 buffer 已被消费。
+func TestSyncUsage_PushSurvivesDialError(t *testing.T) {
+	nodeStore := nodes.NewMemoryStore()
+	userStore := users.NewMemoryStore()
+	_, _ = nodeStore.Upsert(nodes.Node{ID: "n1", Name: "n1", BaseURL: "hub://n1"})
+	_, _ = userStore.UpsertUser(users.User{
+		ID: "u1", Username: "alice", Status: users.StatusActive, TrafficLimit: 999999,
+	})
+	_, _ = userStore.UpsertUserInbound(users.UserInbound{
+		ID: "u1-ib0", UserID: "u1", NodeID: "n1", UUID: "uuid-1",
+	})
+
+	buf := nodes.NewUsageBuffer()
+	_ = buf.Append("n1", 1, nodes.UsageStats{
+		Available: true, Running: true,
+		Users: []nodes.UserUsage{{User: "alice", UploadTotal: 70, DownloadTotal: 30}},
+	})
+
+	dialFail := func(string) (*nodes.Client, error) {
+		return nil, errors.New("node offline")
+	}
+	res, err := SyncUsageWith(context.Background(), userStore, nodeStore, inbounds.NewMemoryStore(), dialFail, ApplyOptions{}, nil, buf)
+	if err != nil {
+		t.Fatalf("SyncUsageWith: %v", err)
+	}
+	if res.UsersUpdated != 1 {
+		t.Fatalf("UsersUpdated=%d want 1; errors=%v", res.UsersUpdated, res.Errors)
+	}
+	alice, _ := userStore.GetUser("u1")
+	if alice.UsedBytes != 100 {
+		t.Fatalf("alice.UsedBytes=%d want 100 (push must survive dial error)", alice.UsedBytes)
+	}
+	node, _ := nodeStore.Get("n1")
+	if node.UploadBytes != 70 || node.DownloadBytes != 30 {
+		t.Fatalf("node traffic=%d/%d want 70/30", node.UploadBytes, node.DownloadBytes)
+	}
+}
+
+// TestSyncUsage_DisabledNodeKeepsPushBuffer 验证禁用节点不消费 buffer，重新启用后可入账。
+func TestSyncUsage_DisabledNodeKeepsPushBuffer(t *testing.T) {
+	nodeStore := nodes.NewMemoryStore()
+	userStore := users.NewMemoryStore()
+	_, _ = nodeStore.Upsert(nodes.Node{ID: "n1", Name: "n1", BaseURL: "hub://n1", Disabled: true})
+	_, _ = userStore.UpsertUser(users.User{
+		ID: "u1", Username: "alice", Status: users.StatusActive, TrafficLimit: 999999,
+	})
+	_, _ = userStore.UpsertUserInbound(users.UserInbound{
+		ID: "u1-ib0", UserID: "u1", NodeID: "n1", UUID: "uuid-1",
+	})
+
+	buf := nodes.NewUsageBuffer()
+	_ = buf.Append("n1", 1, nodes.UsageStats{
+		Available: true, Running: true,
+		Users: []nodes.UserUsage{{User: "alice", UploadTotal: 40, DownloadTotal: 10}},
+	})
+
+	dialOK := func(string) (*nodes.Client, error) {
+		return nodes.NewClientWithHub("n1", nil), nil
+	}
+	_, err := SyncUsageWith(context.Background(), userStore, nodeStore, inbounds.NewMemoryStore(), dialOK, ApplyOptions{}, nil, buf)
+	if err != nil {
+		t.Fatalf("SyncUsageWith(disabled): %v", err)
+	}
+	alice, _ := userStore.GetUser("u1")
+	if alice.UsedBytes != 0 {
+		t.Fatalf("disabled node must not apply traffic, used=%d", alice.UsedBytes)
+	}
+
+	// 重新启用后应能从保留的 buffer 入账
+	n, _ := nodeStore.Get("n1")
+	n.Disabled = false
+	_, _ = nodeStore.Upsert(n)
+
+	_, err = SyncUsageWith(context.Background(), userStore, nodeStore, inbounds.NewMemoryStore(), dialOK, ApplyOptions{}, nil, buf)
+	if err != nil {
+		t.Fatalf("SyncUsageWith(enabled): %v", err)
+	}
+	alice, _ = userStore.GetUser("u1")
+	if alice.UsedBytes != 50 {
+		t.Fatalf("after re-enable used=%d want 50", alice.UsedBytes)
+	}
+}
+
+// TestSyncUsage_UnavailableWithBytesStillCounts 有用户字节时即使 Available=false 也记账。
+func TestSyncUsage_UnavailableWithBytesStillCounts(t *testing.T) {
+	nodeStore := nodes.NewMemoryStore()
+	userStore := users.NewMemoryStore()
+	_, _ = nodeStore.Upsert(nodes.Node{ID: "n1", Name: "n1", BaseURL: "hub://n1"})
+	_, _ = userStore.UpsertUser(users.User{
+		ID: "u1", Username: "alice", Status: users.StatusActive, TrafficLimit: 999999,
+	})
+	_, _ = userStore.UpsertUserInbound(users.UserInbound{
+		ID: "u1-ib0", UserID: "u1", NodeID: "n1", UUID: "uuid-1",
+	})
+
+	buf := nodes.NewUsageBuffer()
+	_ = buf.Append("n1", 1, nodes.UsageStats{
+		Available: false, Running: false,
+		Users: []nodes.UserUsage{{User: "alice", UploadTotal: 12, DownloadTotal: 8}},
+	})
+	dialOK := func(string) (*nodes.Client, error) {
+		return nodes.NewClientWithHub("n1", nil), nil
+	}
+	_, err := SyncUsageWith(context.Background(), userStore, nodeStore, inbounds.NewMemoryStore(), dialOK, ApplyOptions{}, nil, buf)
+	if err != nil {
+		t.Fatalf("SyncUsageWith: %v", err)
+	}
+	alice, _ := userStore.GetUser("u1")
+	if alice.UsedBytes != 20 {
+		t.Fatalf("used=%d want 20", alice.UsedBytes)
 	}
 }

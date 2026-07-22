@@ -177,10 +177,9 @@ func TestUsagePusher_AckTimeoutKeepsPending(t *testing.T) {
 		t.Fatalf("pending should still be 1 after ack timeout, got %d", p.PendingCount())
 	}
 
-	// 下一轮 tick 应同时重发 seq=1 和发新的 seq=2。
+	// 下一轮 tick：只重发 seq=1，不得发新 seq（避免累计快照重叠双计）。
 	p.tick(ctx)
 	pushed := sender.pushedSeqs()
-	// 至少包含 seq=1 两次（首发 + 重发）和新 seq=2。
 	count1 := 0
 	hasNew := false
 	for _, s := range pushed {
@@ -194,8 +193,35 @@ func TestUsagePusher_AckTimeoutKeepsPending(t *testing.T) {
 	if count1 < 2 {
 		t.Fatalf("seq=1 should have been re-pushed, total occurrences=%d, all=%v", count1, pushed)
 	}
-	if !hasNew {
-		t.Fatalf("expected new seq=2 in pushes %v", pushed)
+	if hasNew {
+		t.Fatalf("must not open seq=2 while seq=1 pending, got pushes %v", pushed)
+	}
+	if p.PendingCount() != 1 {
+		t.Fatalf("pending should still be 1, got %d", p.PendingCount())
+	}
+}
+
+// TestUsagePusher_NoNewSeqUntilAck 验证 ack 前持续 tick 不会累积多个 pending seq。
+func TestUsagePusher_NoNewSeqUntilAck(t *testing.T) {
+	t.Parallel()
+	api := &mockUsageAPI{}
+	sender := newMockSender()
+	p := NewUsagePusher(api, time.Hour)
+	p.SetAckTimeout(time.Hour) // 故意不 ack
+	p.SetSender(sender)
+
+	ctx := context.Background()
+	p.tick(ctx) // prime
+	p.tick(ctx) // seq=1
+	p.tick(ctx) // re-push only
+	p.tick(ctx) // re-push only
+	if p.PendingCount() != 1 {
+		t.Fatalf("PendingCount=%d, want 1", p.PendingCount())
+	}
+	for _, s := range sender.pushedSeqs() {
+		if s != 1 {
+			t.Fatalf("unexpected seq %d while first still pending", s)
+		}
 	}
 }
 

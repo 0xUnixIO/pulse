@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"log/slog"
+	"sort"
 	"sync"
 	"sync/atomic"
 	"time"
@@ -22,7 +23,11 @@ type UsageSnapshotProvider interface {
 // 协议在收到 ack 后才真正 reset xray 计数器。
 //
 // 重启容灾：第一次启动时先做一次 reset 清零 xray 累计计数（但不 push），
-// 避免上报历史累计数据；之后的轮次都按 (current - baseline) 计算 delta。
+// 避免上报历史累计数据；之后的轮次在无未 ack 帧时取当前累计快照并 push。
+//
+// 并发约束（防双计）：任意时刻最多 1 个未 ack 的 seq。若仍有 pending，
+// 本轮只重发旧帧，不取新快照、不分配新 seq——因为 DoUsage(false) 返回的是
+// 「自上次 reset 起的累计」，新 seq 会与旧帧语义重叠，server 按帧相加会虚高。
 type UsagePusher struct {
 	api      UsageSnapshotProvider
 	interval time.Duration
@@ -113,7 +118,24 @@ func (p *UsagePusher) tick(ctx context.Context) {
 		return
 	}
 
-	// 取一次 delta 快照（不 reset）。
+	// 仍有未 ack 帧：只重发，不发新 seq（避免累计快照重叠双计）。
+	var pendings []pendingUsage
+	p.pending.Range(func(_, v any) bool {
+		pendings = append(pendings, v.(pendingUsage))
+		return true
+	})
+	if len(pendings) > 0 {
+		sort.Slice(pendings, func(i, j int) bool { return pendings[i].seq < pendings[j].seq })
+		for _, pu := range pendings {
+			if err := sender.PushEvent("", "usage_push", pu.body, pu.seq); err != nil {
+				p.logger.Warn("nodeagent: re-push usage failed", "seq", pu.seq, "err", err)
+				return
+			}
+		}
+		return
+	}
+
+	// 无 pending：取累计快照并 push 新 seq。
 	stats := p.api.DoUsage(false)
 	body, err := json.Marshal(stats)
 	if err != nil {
@@ -121,22 +143,8 @@ func (p *UsagePusher) tick(ctx context.Context) {
 		return
 	}
 
-	// 重发尚未 ack 的旧 seq（按 seq 升序，server 端去重）。
-	var pendings []pendingUsage
-	p.pending.Range(func(k, v any) bool {
-		pendings = append(pendings, v.(pendingUsage))
-		return true
-	})
-	for _, pu := range pendings {
-		if err := sender.PushEvent("", "usage_push", pu.body, pu.seq); err != nil {
-			p.logger.Warn("nodeagent: re-push usage failed", "seq", pu.seq, "err", err)
-			return
-		}
-	}
-
 	seq := p.nextSeq.Add(1)
-	pend := pendingUsage{seq: seq, body: body}
-	p.pending.Store(seq, pend)
+	p.pending.Store(seq, pendingUsage{seq: seq, body: body})
 
 	if err := sender.PushEvent("", "usage_push", body, seq); err != nil {
 		p.logger.Warn("nodeagent: push usage failed", "seq", seq, "err", err)
