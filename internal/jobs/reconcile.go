@@ -10,6 +10,7 @@ import (
 	"pulse/internal/nodes"
 	"pulse/internal/nodes/confighash"
 	"pulse/internal/outbounds"
+	"pulse/internal/proxycfg"
 	"pulse/internal/users"
 )
 
@@ -19,6 +20,7 @@ type ReconcileResult struct {
 	NodesMismatch int      `json:"nodes_mismatch"`
 	NodesApplied  int      `json:"nodes_applied"`
 	NodesCooling  int      `json:"nodes_cooling"`
+	UsersKicked   int      `json:"users_kicked"`
 	Errors        []string `json:"errors"`
 }
 
@@ -84,6 +86,7 @@ func ReconcileNodeConfigs(
 	// ── 阶段 1：并发拉取各节点实际配置（网络 IO，不持锁） ──────────────────
 	type nodeCheck struct {
 		node   nodes.Node
+		client *nodes.Client
 		actual string // 实际配置 hash；空表示无可比对配置
 		skip   bool
 		errMsg string
@@ -116,7 +119,7 @@ func ReconcileNodeConfigs(
 				checks[idx] = nodeCheck{node: node, skip: true}
 				return
 			}
-			checks[idx] = nodeCheck{node: node, actual: confighash.HashFromXrayJSON(cfg.Config)}
+			checks[idx] = nodeCheck{node: node, client: c, actual: confighash.HashFromXrayJSON(cfg.Config)}
 		}(i, n)
 	}
 	wg.Wait()
@@ -163,5 +166,90 @@ func ReconcileNodeConfigs(
 		result.NodesApplied++
 	}
 
+	// ── 阶段 3：断连兜底 ───────────────────────────────────────────────────
+	//
+	// SyncUsage 的「热删 + 踢连接」只在状态翻转那一轮执行一次。目标节点当轮
+	// dial 失败被跳过、或 KickUsers RPC 失败，此后 statusChanged 恒为 false，
+	// 不会再有第二次机会。而上面的重下发走优雅重载（不断存量连接），配置修好了
+	// 连接却还在跑——超限用户仍能继续消耗流量。故此处无条件补一次踢连接。
+	//
+	// 只作用于本就该被断开的用户，正常用户不受影响；节点上没有这类用户时不发 RPC。
+	for _, chk := range checks {
+		if ctx.Err() != nil {
+			break
+		}
+		if chk.skip || chk.client == nil {
+			continue
+		}
+		mu.Lock()
+		emails, err := collectDisabledEmails(chk.node.ID, userStore, ibStore, now)
+		mu.Unlock()
+		if err != nil {
+			result.Errors = append(result.Errors, chk.node.ID+": collect disabled: "+err.Error())
+			continue
+		}
+		if len(emails) == 0 {
+			continue
+		}
+		n, err := chk.client.KickUsers(ctx, emails)
+		if err != nil {
+			result.Errors = append(result.Errors, chk.node.ID+": kick: "+err.Error())
+			continue
+		}
+		if n > 0 {
+			log.Printf("reconcile: 节点 %s 断开 %d 条应禁用用户的存量连接", chk.node.ID, n)
+		}
+		result.UsersKicked += n
+	}
+
 	return result, nil
+}
+
+// collectDisabledEmails 收集该节点上「不应再有流量」的用户在 xray 中的 email。
+//
+// email 形如 username@tag，与 proxycfg 下发配置时的构造保持一致，
+// 否则节点侧按 email 匹配不到连接。
+func collectDisabledEmails(
+	nodeID string,
+	userStore users.Store,
+	ibStore inbounds.InboundStore,
+	now time.Time,
+) ([]string, error) {
+	nodeInbounds, err := ibStore.ListInboundsByNode(nodeID)
+	if err != nil {
+		return nil, err
+	}
+	accesses, err := userStore.ListUserInboundsByNode(nodeID)
+	if err != nil {
+		return nil, err
+	}
+	userMap, err := userStore.GetUsersByIDs(collectUserIDs(accesses))
+	if err != nil {
+		return nil, err
+	}
+
+	ibByID := make(map[string]inbounds.Inbound, len(nodeInbounds))
+	for _, ib := range nodeInbounds {
+		ibByID[ib.ID] = ib
+	}
+
+	seen := make(map[string]struct{})
+	emails := make([]string, 0)
+	for _, acc := range accesses {
+		u, ok := userMap[acc.UserID]
+		if !ok || u.EffectiveEnabledAt(now) {
+			continue
+		}
+		ib, ok := ibByID[acc.InboundID]
+		if !ok {
+			continue
+		}
+		email := u.Username + proxycfg.UserInboundSep + inboundTag(ib)
+		if _, dup := seen[email]; dup {
+			continue
+		}
+		seen[email] = struct{}{}
+		emails = append(emails, email)
+	}
+	return emails, nil
 }

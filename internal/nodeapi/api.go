@@ -184,6 +184,32 @@ return errors.New("inbound_tag and email are required")
 return a.activeManager().RemoveUser(ctx, inboundTag, email)
 }
 
+// DoKickUsers 强制断开这些用户的全部存量连接，返回被断开的连接总数。
+// 与 DoRemoveUser 配合完成超限止血：热删拦新连接，踢连接止住存量流量。
+//
+// 单个用户失败不影响其余用户，最后合并返回错误——对账兜底会一次传入多个
+// email，不应因其中一个出错就整批放弃。
+func (a *API) DoKickUsers(ctx context.Context, emails []string) (int, error) {
+if len(emails) == 0 {
+return 0, errors.New("emails is required")
+}
+mgr := a.activeManager()
+total := 0
+var firstErr error
+for _, email := range emails {
+if email == "" {
+continue
+}
+n, err := mgr.KickUser(ctx, email)
+if err != nil && firstErr == nil {
+firstErr = err
+continue
+}
+total += n
+}
+return total, firstErr
+}
+
 // DoEnsureCert 当前实现仅返回 ok（实际 ACME 流程在 certmgr 包，节点侧无操作）。
 func (a *API) DoEnsureCert(domain, cfToken string) map[string]any {
 _ = domain

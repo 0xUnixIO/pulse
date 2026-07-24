@@ -237,6 +237,7 @@ func TestUserSupportsMultipleProtocols(t *testing.T) {
 func TestSyncUsageDisablesLimitedUserAndReloadsNode(t *testing.T) {
 	var capturedConfig string
 	var removedEmails []string
+	var kickedEmails []string
 	nodeStore := nodes.NewMemoryStore()
 	_, _ = nodeStore.Upsert(nodes.Node{
 		ID:      "node-1",
@@ -255,6 +256,12 @@ func TestSyncUsageDisablesLimitedUserAndReloadsNode(t *testing.T) {
 				removedEmails = append(removedEmails, m["email"])
 			}
 			return json.RawMessage(`{}`), nil
+		},
+		"KickUser": func(b any) (json.RawMessage, error) {
+			if m, ok := b.(map[string][]string); ok {
+				kickedEmails = append(kickedEmails, m["emails"]...)
+			}
+			return json.RawMessage(`{"kicked":1}`), nil
 		},
 	}}
 	baseAPI := New(nodeStore)
@@ -312,18 +319,30 @@ func TestSyncUsageDisablesLimitedUserAndReloadsNode(t *testing.T) {
 	if !bob.EffectiveEnabled() {
 		t.Fatalf("expected bob to remain enabled")
 	}
-	// 超限用户必须走全量 Restart：xray 的 RemoveUser 只拒绝新连接，已建立的连接
-	// 会继续传输并计费，热删无法阻止超限用户继续跑流量。
-	if len(removedEmails) != 0 {
-		t.Fatalf("expected full restart for limited user, but RemoveUser was called: %v", removedEmails)
+	// 超限处置分两步：RemoveUser 拦截新连接，KickUser 断开存量连接。
+	// 只做前者的话，xray 鉴权仅在建链时执行一次，存量连接会一直跑到自己结束。
+	if len(removedEmails) == 0 {
+		t.Fatal("expected RemoveUser to be called for the limited user")
 	}
-	if capturedConfig == "" {
-		t.Fatal("expected a full config restart, got none")
+	if len(kickedEmails) == 0 {
+		t.Fatal("expected KickUser to be called: 仅热删无法断开存量连接")
 	}
-	if strings.Contains(capturedConfig, "alice") {
-		t.Errorf("restarted config still contains limited user alice: %s", capturedConfig)
+	for _, e := range removedEmails {
+		if strings.Contains(e, "bob") {
+			t.Errorf("did not expect bob to be removed, got %q", e)
+		}
 	}
-	if !strings.Contains(capturedConfig, "bob") {
-		t.Errorf("restarted config dropped active user bob: %s", capturedConfig)
+	foundAlice := false
+	for _, e := range kickedEmails {
+		if strings.Contains(e, "alice") {
+			foundAlice = true
+		}
+		if strings.Contains(e, "bob") {
+			t.Errorf("bob 被误踢: %q", e)
+		}
 	}
+	if !foundAlice {
+		t.Errorf("expected alice to be kicked, got %v", kickedEmails)
+	}
+	_ = capturedConfig
 }

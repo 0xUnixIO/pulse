@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"net/http"
+	"strings"
 	"sync"
 	"testing"
 	"time"
@@ -254,5 +255,118 @@ func TestReconcileNodeConfigs_SkipsDisabledNode(t *testing.T) {
 	defer mu.Unlock()
 	if restarts != 0 {
 		t.Errorf("禁用节点被下发：restart=%d", restarts)
+	}
+}
+
+// TestReconcileNodeConfigs_KicksDisabledUsers 覆盖对账的断连兜底。
+//
+// SyncUsage 的「热删 + 踢连接」只在用户状态翻转那一轮执行一次，两类常见情况会
+// 让它整个落空：目标节点当轮 dial 失败被跳过，或 KickUsers RPC 本身失败。此后
+// statusChanged 恒为 false，不会再有第二次机会。而对账重下发配置走的是优雅重载
+// （不断存量连接），配置修好了连接却还在跑——正是超额跑到 128 GB 的老问题。
+// 因此对账必须无条件对应禁用用户补一次踢连接。
+func TestReconcileNodeConfigs_KicksDisabledUsers(t *testing.T) {
+	resetReconcileState()
+	nodeStore, userStore, ibStore := limitFixture(t, 100)
+
+	alice, _ := userStore.GetUser("u1")
+	alice.UploadBytes = 128
+	alice.UsedBytes = 128
+	if _, err := userStore.UpsertUser(alice); err != nil {
+		t.Fatalf("seed limited: %v", err)
+	}
+
+	// 节点配置已经是对的（无漂移），仅存量连接还在跑。
+	inSyncCfg := xrayCfgWithClients("vless-in")
+
+	var mu sync.Mutex
+	restarts := 0
+	var kicked []string
+	dial := func(nodeID string) (*nodes.Client, error) {
+		hub := pathHub(func(path string, w http.ResponseWriter, r *http.Request) {
+			switch path {
+			case "/v1/node/runtime/config":
+				_ = json.NewEncoder(w).Encode(map[string]any{"config": inSyncCfg})
+			case "/v1/node/runtime/users/kick":
+				var req struct {
+					Emails []string `json:"emails"`
+				}
+				_ = json.NewDecoder(r.Body).Decode(&req)
+				mu.Lock()
+				kicked = append(kicked, req.Emails...)
+				mu.Unlock()
+				_ = json.NewEncoder(w).Encode(map[string]any{"kicked": len(req.Emails)})
+			case "/v1/node/runtime/restart", "/v1/node/runtime/start":
+				mu.Lock()
+				restarts++
+				mu.Unlock()
+				_ = json.NewEncoder(w).Encode(map[string]any{"running": true})
+			default:
+				_ = json.NewEncoder(w).Encode(map[string]any{"ok": true})
+			}
+		})
+		return nodes.NewClientWithHub(nodeID, hub), nil
+	}
+
+	res, err := ReconcileNodeConfigs(context.Background(), nodeStore, userStore, ibStore, nil, dial, ApplyOptions{})
+	if err != nil {
+		t.Fatalf("ReconcileNodeConfigs: %v", err)
+	}
+	if res.UsersKicked == 0 {
+		t.Errorf("UsersKicked=0，对账未对超限用户补踢存量连接")
+	}
+
+	mu.Lock()
+	defer mu.Unlock()
+	if len(kicked) == 0 {
+		t.Fatal("未向节点发出踢人指令")
+	}
+	for _, e := range kicked {
+		if !strings.Contains(e, "alice") {
+			t.Errorf("踢了不该踢的用户: %q", e)
+		}
+	}
+	if restarts != 0 {
+		t.Errorf("配置无漂移却重启了节点: restart=%d", restarts)
+	}
+}
+
+// TestReconcileNodeConfigs_NoKickWhenAllEnabled 保证全部用户正常时不发无谓的 RPC。
+func TestReconcileNodeConfigs_NoKickWhenAllEnabled(t *testing.T) {
+	resetReconcileState()
+	nodeStore, userStore, ibStore := limitFixture(t, 1<<40)
+
+	inSyncCfg := xrayCfgWithClients("vless-in", map[string]any{
+		"email": "alice@vless-in",
+		"id":    "11111111-1111-1111-1111-111111111111",
+	})
+
+	var mu sync.Mutex
+	kickCalls := 0
+	dial := func(nodeID string) (*nodes.Client, error) {
+		hub := pathHub(func(path string, w http.ResponseWriter, _ *http.Request) {
+			switch path {
+			case "/v1/node/runtime/config":
+				_ = json.NewEncoder(w).Encode(map[string]any{"config": inSyncCfg})
+			case "/v1/node/runtime/users/kick":
+				mu.Lock()
+				kickCalls++
+				mu.Unlock()
+				_ = json.NewEncoder(w).Encode(map[string]any{"kicked": 0})
+			default:
+				_ = json.NewEncoder(w).Encode(map[string]any{"ok": true})
+			}
+		})
+		return nodes.NewClientWithHub(nodeID, hub), nil
+	}
+
+	if _, err := ReconcileNodeConfigs(context.Background(), nodeStore, userStore, ibStore, nil, dial, ApplyOptions{}); err != nil {
+		t.Fatalf("ReconcileNodeConfigs: %v", err)
+	}
+
+	mu.Lock()
+	defer mu.Unlock()
+	if kickCalls != 0 {
+		t.Errorf("无禁用用户却发了 %d 次踢人 RPC", kickCalls)
 	}
 }

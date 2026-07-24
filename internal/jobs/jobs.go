@@ -509,12 +509,7 @@ func SyncUsageWith(ctx context.Context, store users.Store, nodeStore nodes.Store
 
 		// 非故障恢复场景：优先用 AddUser/RemoveUser 热更新，避免全量重启断流。
 		// 若 delta 成功则跳过 ApplyNodeUsers；若失败则回退到全量重启（兜底）。
-		//
-		// 例外：本节点有用户转为不可用（超限 / 到期）时必须走全量重启。
-		// xray 的 RemoveUser 只把用户从 inbound validator 摘掉，已建立的连接会
-		// 继续传输且仍被 stats 计费——超限用户可借此跑出远超额度的流量。
-		// 重启只波及确实承载该用户的节点，其余节点仍走热更新。
-		if !pa.recover && len(changedUsers) > 0 && !nodeHasDisabledChange(nodeAccesses, changedUsers) {
+		if !pa.recover && len(changedUsers) > 0 {
 			if tryDeltaUsers(ctx, pa.client, nodeInbounds, nodeAccesses, applyMap, changedUsers) {
 				result.NodesReloaded++
 				continue
@@ -540,20 +535,6 @@ func SyncUsageWith(ctx context.Context, store users.Store, nodeStore nodes.Store
 	}
 
 	return result, nil
-}
-
-// nodeHasDisabledChange 判断该节点的用户列表里是否存在本轮转为不可用的用户。
-//
-// 这类用户不能只做热删：xray 的 RemoveUser 仅拒绝新连接，已建立的连接会继续
-// 传输并计入 stats，超限用户能一直跑到连接自然断开为止。只有全量重启才能真正
-// 断开存量连接。
-func nodeHasDisabledChange(nodeAccesses []users.UserInbound, changedUsers map[string]bool) bool {
-	for _, acc := range nodeAccesses {
-		if enabled, ok := changedUsers[acc.UserID]; ok && !enabled {
-			return true
-		}
-	}
-	return false
 }
 
 // tryDeltaUsers 通过 AddUser/RemoveUser 对节点做增量用户变更，避免全量重启。
@@ -631,6 +612,15 @@ func tryDeltaUsers(
 			if err := client.RemoveUser(ctx, tag, email); err != nil {
 				log.Printf("warn: delta RemoveUser %s on %s: %v — falling back to restart", email, tag, err)
 				return false
+			}
+			// 热删只拦得住新连接：鉴权仅在建链时做一次，存量连接不会被回查，
+			// 会一直跑到自己结束——超限用户曾借此把 100 GB 额度跑到 128 GB。
+			// 再踢一次存量连接才能真正止住流量；断连精确到该用户，不波及他人。
+			// 此处失败不阻断流程，由 reconcile-config 的兜底重试。
+			if n, err := client.KickUsers(ctx, []string{email}); err != nil {
+				log.Printf("warn: KickUsers %s: %v — 存量连接可能仍在跑，等待对账兜底", email, err)
+			} else if n > 0 {
+				log.Printf("已断开 %s 的 %d 条存量连接", email, n)
 			}
 			ops++
 		}
@@ -895,10 +885,10 @@ type ApplyOptions struct {
 	RouteRuleStore routerules.Store // nil 时不应用全局分流规则
 	// UserStore 和 NodeStore 用于将节点 inbound 作为分流出口（nodeib: 前缀）时查找凭据和地址。
 	// nil 时跳过节点 inbound 出口构建。
-	UserStore   users.Store
-	NodeStore   nodes.Store
-	Settings    SettingGetter  // nil 时跳过 CF Token 等系统配置读取
-	PanelPort   int            // 0 时 NodeGate 不配置 panel 反代端口
+	UserStore users.Store
+	NodeStore nodes.Store
+	Settings  SettingGetter // nil 时跳过 CF Token 等系统配置读取
+	PanelPort int           // 0 时 NodeGate 不配置 panel 反代端口
 }
 
 // ApplyNodeUsers 根据节点 inbound 配置和用户凭据生成配置并下发到节点。
@@ -1011,13 +1001,13 @@ func ApplyNodeUsers(ctx context.Context, client *nodes.Client, nodeInbounds []in
 	}
 
 	cfg, err := proxycfg.Build(nodeInbounds, userAccesses, userMap, proxycfg.BuildOptions{
-		OutboundMap:    outboundMap,
-		RouteRules:     globalRouteRules,
-		NodeID:         node.ID,
-		AllInboundMap:  allInboundMap,
-		AllNodeMap:     allNodeMap,
-		UserInboundMap: userInboundMap,
-		CertPathFor:    nodeCertPath,
+		OutboundMap:     outboundMap,
+		RouteRules:      globalRouteRules,
+		NodeID:          node.ID,
+		AllInboundMap:   allInboundMap,
+		AllNodeMap:      allNodeMap,
+		UserInboundMap:  userInboundMap,
+		CertPathFor:     nodeCertPath,
 		KnownReadyCerts: knownReadyCerts,
 	})
 	if err != nil {
@@ -1168,4 +1158,3 @@ func PortforwardTargetPort(ib inbounds.Inbound, httpsPort int) int {
 		return ib.Port
 	}
 }
-

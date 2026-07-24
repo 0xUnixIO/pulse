@@ -18,10 +18,11 @@ import (
 	"sync"
 	"time"
 
-	xrayCore "github.com/0xUnixIO/Xray-core/core"
 	"github.com/0xUnixIO/Xray-core/app/stats/command"
+	"github.com/0xUnixIO/Xray-core/common/conntrack"
 	xrayCommonLog "github.com/0xUnixIO/Xray-core/common/log"
 	"github.com/0xUnixIO/Xray-core/common/protocol"
+	xrayCore "github.com/0xUnixIO/Xray-core/core"
 	"github.com/0xUnixIO/Xray-core/features/inbound"
 	"github.com/0xUnixIO/Xray-core/features/stats"
 	"github.com/0xUnixIO/Xray-core/infra/conf/serial"
@@ -33,13 +34,14 @@ import (
 
 	// 注册所有必要的 xray 协议、transport 及 app（必须 side-effect import）
 	_ "github.com/0xUnixIO/Xray-core/app/dispatcher"
+	_ "github.com/0xUnixIO/Xray-core/app/log"
+	_ "github.com/0xUnixIO/Xray-core/app/policy"
 	_ "github.com/0xUnixIO/Xray-core/app/proxyman/inbound"
 	_ "github.com/0xUnixIO/Xray-core/app/proxyman/outbound"
+	_ "github.com/0xUnixIO/Xray-core/app/router"
 	_ "github.com/0xUnixIO/Xray-core/app/stats"
 	_ "github.com/0xUnixIO/Xray-core/app/stats/command"
-	_ "github.com/0xUnixIO/Xray-core/app/policy"
-	_ "github.com/0xUnixIO/Xray-core/app/router"
-	_ "github.com/0xUnixIO/Xray-core/app/log"
+	_ "github.com/0xUnixIO/Xray-core/main/json"
 	_ "github.com/0xUnixIO/Xray-core/proxy/anytls"
 	_ "github.com/0xUnixIO/Xray-core/proxy/blackhole"
 	_ "github.com/0xUnixIO/Xray-core/proxy/dokodemo"
@@ -53,7 +55,6 @@ import (
 	_ "github.com/0xUnixIO/Xray-core/transport/internet/tls"
 	_ "github.com/0xUnixIO/Xray-core/transport/internet/udp"
 	_ "github.com/0xUnixIO/Xray-core/transport/internet/websocket"
-	_ "github.com/0xUnixIO/Xray-core/main/json"
 
 	"pulse/internal/coremanager"
 )
@@ -78,10 +79,15 @@ type Manager struct {
 	mu      sync.Mutex
 	resetMu sync.Mutex // 序列化 Usage(reset=true) 调用，防止并发竞争
 	// xray-core in-process 实例（替代原来的 *exec.Cmd）
-	instance   *xrayCore.Instance
-	startedAt  time.Time
-	lastConfig string
-	configFile string // 持久化路径（用于进程重启恢复）
+	instance  *xrayCore.Instance
+	startedAt time.Time
+	// instanceCancel 取消实例根 ctx。xray 每个连接的 ctx 都派生自它
+	// （app/proxyman/inbound/worker.go 的 context.WithCancel(w.ctx)），
+	// 因此取消它才能断开存量连接——instance.Close() 只关 listener，
+	// 已建立的连接会继续收发。
+	instanceCancel context.CancelFunc
+	lastConfig     string
+	configFile     string // 持久化路径（用于进程重启恢复）
 
 	logs        []string
 	subscribers map[int64]chan string
@@ -169,14 +175,17 @@ func (m *Manager) Start(config string) error {
 		return fmt.Errorf("parse xray config: %w", err)
 	}
 
-	// 创建 xray-core 实例
-	instance, err := xrayCore.New(pbConfig)
+	// 创建 xray-core 实例。用可取消的根 ctx，使 Stop 能强制断开存量连接。
+	instanceCtx, instanceCancel := context.WithCancel(context.Background())
+	instance, err := xrayCore.NewWithContext(instanceCtx, pbConfig)
 	if err != nil {
+		instanceCancel()
 		return fmt.Errorf("create xray instance: %w", err)
 	}
 
 	// 启动实例
 	if err := instance.Start(); err != nil {
+		instanceCancel()
 		return fmt.Errorf("start xray instance: %w", err)
 	}
 
@@ -184,6 +193,7 @@ func (m *Manager) Start(config string) error {
 
 	m.mu.Lock()
 	m.instance = instance
+	m.instanceCancel = instanceCancel
 	m.startedAt = time.Now().UTC()
 	m.lastConfig = config
 	m.samplerStop = stopCh
@@ -209,8 +219,18 @@ func (m *Manager) Start(config string) error {
 	return nil
 }
 
-// Stop 停止 xray-core in-process 实例及 AnyTLS 入站服务。
+// Stop 停止 xray-core in-process 实例及 AnyTLS 入站服务，并断开所有存量连接。
 func (m *Manager) Stop() error {
+	return m.stop(true)
+}
+
+// stop 停止实例。dropConns 决定是否强制断开存量连接：
+//
+//   - 显式停止（Stop）传 true：服务要停了，连接不该继续存活。
+//   - 配置重载（Restart）传 false：旧实例交出监听端口，存量连接留在旧实例上
+//     自然结束，新连接由新实例接管——即优雅重载，不误伤在线用户。
+//     超限用户的止血由 KickUser 精确处理，不依赖重启。
+func (m *Manager) stop(dropConns bool) error {
 	m.mu.Lock()
 	instance := m.instance
 	if instance == nil {
@@ -219,6 +239,8 @@ func (m *Manager) Stop() error {
 	}
 	// 立即清除引用，防止并发操作
 	m.instance = nil
+	instanceCancel := m.instanceCancel
+	m.instanceCancel = nil
 	m.startedAt = time.Time{}
 	stopCh := m.samplerStop
 	m.samplerStop = nil
@@ -239,8 +261,16 @@ func (m *Manager) Stop() error {
 	// 卸载自定义 log handler，恢复默认 stdout 输出，避免 logCapture goroutine 退出后悬空引用
 	xrayCommonLog.RegisterHandler(xrayCommonLog.NewLogger(xrayCommonLog.CreateStdoutLogWriter()))
 
-	if err := instance.Close(); err != nil {
-		return fmt.Errorf("close xray instance: %w", err)
+	closeErr := instance.Close()
+
+	// instance.Close() 只关闭 listener 与各 feature，已建立的连接仍在各自
+	// goroutine 里收发；取消实例根 ctx 才能真正断链。
+	if dropConns && instanceCancel != nil {
+		instanceCancel()
+	}
+
+	if closeErr != nil {
+		return fmt.Errorf("close xray instance: %w", closeErr)
 	}
 
 	// 显式停止时清除持久化配置，避免下次进程启动时自动恢复
@@ -252,6 +282,9 @@ func (m *Manager) Stop() error {
 }
 
 // Restart 重启 xray。若配置未变化则跳过。
+//
+// 走优雅重载：存量连接留在旧实例上自然结束，不因一次配置下发把在线用户全断掉。
+// 需要立即切断某个用户的流量时用 KickUser，它精确到用户、不波及他人。
 func (m *Manager) Restart(config string) error {
 	m.mu.Lock()
 	unchanged := m.instance != nil && config == m.lastConfig
@@ -261,7 +294,7 @@ func (m *Manager) Restart(config string) error {
 		return nil
 	}
 
-	if err := m.Stop(); err != nil && !errors.Is(err, ErrNotRunning) {
+	if err := m.stop(false); err != nil && !errors.Is(err, ErrNotRunning) {
 		return err
 	}
 	return m.Start(config)
@@ -863,6 +896,21 @@ func (m *Manager) AddUser(ctx context.Context, cfg coremanager.UserConfig) error
 	}
 
 	return xrayAddUser(ctx, instance, cfg.InboundTag, memUser)
+}
+
+// KickUser 强制断开该用户在本节点的全部存量连接，返回被断开的连接数。
+//
+// RemoveUser 只更新 inbound validator，拦截的是后续新连接；鉴权仅在建链时
+// 做一次，存量连接不会被回查，会一直跑到自己结束（100 GB 额度曾因此跑到
+// 128 GB）。此方法按用户精确断连，同节点其他用户不受影响。
+func (m *Manager) KickUser(_ context.Context, email string) (int, error) {
+	m.mu.Lock()
+	running := m.instance != nil
+	m.mu.Unlock()
+	if !running {
+		return 0, ErrNotRunning
+	}
+	return conntrack.Kick(email), nil
 }
 
 // RemoveUser 从运行中的 Xray inbound 热删用户。

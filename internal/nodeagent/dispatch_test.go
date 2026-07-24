@@ -35,6 +35,7 @@ func (s *stubManager) RuntimeInfo(context.Context) coremanager.RuntimeInfo {
 func (s *stubManager) Version(context.Context) (string, error) { return "stub", nil }
 func (s *stubManager) AddUser(context.Context, coremanager.UserConfig) error { return nil }
 func (s *stubManager) RemoveUser(context.Context, string, string) error      { return nil }
+func (s *stubManager) KickUser(context.Context, string) (int, error)         { return 0, nil }
 
 func newTestAPI() *nodeapi.API {
 	return nodeapi.New(&stubManager{})

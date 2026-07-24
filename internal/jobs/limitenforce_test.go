@@ -66,13 +66,13 @@ func limitFixture(t *testing.T, limit int64) (nodes.Store, users.Store, inbounds
 	return nodeStore, userStore, ibStore
 }
 
-// TestSyncUsage_LimitedUserForcesRestart 复现「超限用户只被热删、已有连接不断」。
+// TestSyncUsage_LimitedUserIsKicked 复现「超限用户只被热删、存量连接不断」。
 //
-// Xray 的 RemoveUser 仅把用户从 inbound validator 摘掉：已建立的连接会继续传输，
-// 且流量仍被 stats 计数，用户可以在超限后持续跑出远超额度的流量（线上出现过
-// 100 GB 额度跑到 128 GB）。因此用户由 enabled 转 disabled 时必须走全量重启，
-// 强制断开存量连接。
-func TestSyncUsage_LimitedUserForcesRestart(t *testing.T) {
+// Xray 的鉴权只在建链时做一次，RemoveUser 仅把用户从 inbound validator 摘掉：
+// 已建立的连接不会被回查，会继续传输且仍被 stats 计费，用户可以在超限后跑出
+// 远超额度的流量（线上出现过 100 GB 额度跑到 128 GB）。
+// 因此超限处置必须是 RemoveUser（拦新连接）+ KickUser（断存量连接）两步。
+func TestSyncUsage_LimitedUserIsKicked(t *testing.T) {
 	nodeStore, userStore, ibStore := limitFixture(t, 100)
 
 	rec := newCallRecorder()
@@ -105,15 +105,20 @@ func TestSyncUsage_LimitedUserForcesRestart(t *testing.T) {
 	if alice.EffectiveStatus() != users.StatusLimited {
 		t.Fatalf("alice status=%s used=%d, want limited", alice.EffectiveStatus(), alice.UsedBytes)
 	}
-	if got := rec.count("/v1/node/runtime/restart"); got == 0 {
-		t.Errorf("超限用户未触发全量重启：restart=0，热删无法断开存量连接（RemoveUser=%d）",
-			rec.count("/v1/node/runtime/users/remove"))
+	if got := rec.count("/v1/node/runtime/users/remove"); got != 1 {
+		t.Errorf("RemoveUser=%d, want 1（应热删以拦截新连接）", got)
+	}
+	if got := rec.count("/v1/node/runtime/users/kick"); got != 1 {
+		t.Errorf("KickUser=%d, want 1（未踢掉存量连接，超限流量不会停）", got)
+	}
+	if got := rec.count("/v1/node/runtime/restart"); got != 0 {
+		t.Errorf("restart=%d, want 0（精确断连不应重启节点误伤他人）", got)
 	}
 }
 
-// TestSyncUsage_LimitedRestartScopedToAffectedNode 保证「超限强制重启」的影响面
-// 收敛到确实承载了该用户的节点：无关节点不应被断流。
-func TestSyncUsage_LimitedRestartScopedToAffectedNode(t *testing.T) {
+// TestSyncUsage_LimitedKickScopedToAffectedNode 保证超限处置的影响面收敛到确实
+// 承载该用户的节点：无关节点既不该被重启，也不该收到踢人指令。
+func TestSyncUsage_LimitedKickScopedToAffectedNode(t *testing.T) {
 	nodeStore, userStore, ibStore := limitFixture(t, 100)
 
 	// 追加一个只承载 bob 的节点 n2，本轮 bob 状态不变。
@@ -142,16 +147,23 @@ func TestSyncUsage_LimitedRestartScopedToAffectedNode(t *testing.T) {
 
 	var mu sync.Mutex
 	restartsByNode := make(map[string]int)
+	kicksByNode := make(map[string]int)
 	dial := func(nodeID string) (*nodes.Client, error) {
 		hub := pathHub(func(path string, w http.ResponseWriter, _ *http.Request) {
-			if path == "/v1/node/runtime/restart" || path == "/v1/node/runtime/start" {
+			switch path {
+			case "/v1/node/runtime/restart", "/v1/node/runtime/start":
 				mu.Lock()
 				restartsByNode[nodeID]++
 				mu.Unlock()
 				_ = json.NewEncoder(w).Encode(map[string]any{"running": true})
-				return
+			case "/v1/node/runtime/users/kick":
+				mu.Lock()
+				kicksByNode[nodeID]++
+				mu.Unlock()
+				_ = json.NewEncoder(w).Encode(map[string]any{"kicked": 1})
+			default:
+				_ = json.NewEncoder(w).Encode(map[string]any{"ok": true})
 			}
-			_ = json.NewEncoder(w).Encode(map[string]any{"ok": true})
 		})
 		return nodes.NewClientWithHub(nodeID, hub), nil
 	}
@@ -181,10 +193,13 @@ func TestSyncUsage_LimitedRestartScopedToAffectedNode(t *testing.T) {
 
 	mu.Lock()
 	defer mu.Unlock()
-	if restartsByNode["n1"] == 0 {
-		t.Errorf("n1 承载超限用户 alice，应被重启断连，实际 restart=0")
+	if kicksByNode["n1"] == 0 {
+		t.Errorf("n1 承载超限用户 alice，应踢掉其存量连接，实际 kick=0")
+	}
+	if kicksByNode["n2"] != 0 {
+		t.Errorf("n2 不承载超限用户，不应收到踢人指令，实际 kick=%d", kicksByNode["n2"])
 	}
 	if restartsByNode["n2"] != 0 {
-		t.Errorf("n2 不承载超限用户，不应被断流，实际 restart=%d", restartsByNode["n2"])
+		t.Errorf("n2 不应被断流，实际 restart=%d", restartsByNode["n2"])
 	}
 }

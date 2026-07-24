@@ -92,4 +92,12 @@ type Manager interface {
 	AddUser(ctx context.Context, cfg UserConfig) error
 	// RemoveUser 从运行中的 inbound 热删用户。已有连接自然结束，新连接立即拒绝。
 	RemoveUser(ctx context.Context, inboundTag, email string) error
+
+	// KickUser 强制断开该用户的全部存量连接，返回被断开的连接数。
+	//
+	// 与 RemoveUser 配合使用：RemoveUser 只更新 inbound validator，拦截的是
+	// 后续新连接；鉴权只在建链时做一次，已建立的连接不会被回查，会一直跑到
+	// 自己结束。超限用户必须再调 KickUser 才能立即止住流量。
+	// 断连精确到用户，同节点其他用户不受影响。
+	KickUser(ctx context.Context, email string) (int, error)
 }

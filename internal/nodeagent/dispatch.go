@@ -140,6 +140,19 @@ func (d *APIDispatcher) Handle(ctx context.Context, method string, body json.Raw
 		}
 		return marshal(map[string]any{"ok": true})
 
+	case "KickUser":
+		var req struct {
+			Emails []string `json:"emails"`
+		}
+		if err := json.Unmarshal(body, &req); err != nil {
+			return nil, fmt.Errorf("decode KickUser body: %w", err)
+		}
+		n, err := d.api.DoKickUsers(ctx, req.Emails)
+		if err != nil {
+			return nil, err
+		}
+		return marshal(map[string]any{"kicked": n})
+
 	case "Update":
 		return marshal(d.api.DoUpdate())
 

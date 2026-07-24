@@ -3,7 +3,7 @@ module pulse
 go 1.26.1
 
 require (
-	github.com/0xUnixIO/Xray-core v1.260507.1-anytls
+	github.com/0xUnixIO/Xray-core v1.260507.2-anytls
 	github.com/caddyserver/certmagic v0.25.2
 	github.com/jackc/pgx/v5 v5.9.1
 	github.com/libdns/cloudflare v0.2.2

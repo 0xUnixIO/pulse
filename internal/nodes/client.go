@@ -227,6 +227,28 @@ func (c *Client) RemoveUser(ctx context.Context, inboundTag, email string) error
 	return c.callHub(ctx, "RemoveUser", body, nil)
 }
 
+// KickUsers 断开这些用户在节点上的全部存量连接，返回被断开的连接总数。
+//
+// RemoveUser 只拦得住新连接：鉴权仅在建链时做一次，存量连接不会被回查，
+// 会一直跑到自己结束。超限用户需要 RemoveUser + KickUsers 两步才能真正止血。
+// 断连精确到用户，同节点其他用户不受影响。
+//
+// 批量形式是为对账兜底服务的：那里需要周期性扫过全部应禁用用户，
+// 逐个发 RPC 的量会随用户数与 inbound 数相乘放大。
+func (c *Client) KickUsers(ctx context.Context, emails []string) (int, error) {
+	if len(emails) == 0 {
+		return 0, nil
+	}
+	var out struct {
+		Kicked int `json:"kicked"`
+	}
+	body := map[string][]string{"emails": emails}
+	if err := c.callHub(ctx, "KickUser", body, &out); err != nil {
+		return 0, err
+	}
+	return out.Kicked, nil
+}
+
 func (c *Client) Update(ctx context.Context) (map[string]any, error) {
 	var out map[string]any
 	err := c.callHub(ctx, "Update", nil, &out)

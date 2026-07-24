@@ -34,18 +34,19 @@ func hubDial(hub *fakeHub) NodeDialer {
 // methodPaths 把 nodes.Client RPC 方法名映射到旧 HTTP 路径，
 // 让基于 path-style 的老测试 handler（testDial）继续工作。
 var methodPaths = map[string]string{
-	"Runtime":    "/v1/node/runtime",
-	"Status":     "/v1/node/runtime/status",
-	"Logs":       "/v1/node/runtime/logs",
-	"AccessLogs": "/v1/node/runtime/accesslogs",
-	"Config":     "/v1/node/runtime/config",
-	"Usage":      "/v1/node/runtime/usage",
-	"Start":      "/v1/node/runtime/start",
-	"Stop":       "/v1/node/runtime/stop",
-	"Restart":    "/v1/node/runtime/restart",
-	"AddUser":    "/v1/node/runtime/users/add",
-	"RemoveUser": "/v1/node/runtime/users/remove",
-	"SpeedTest":  "/v1/node/speedtest",
+	"Runtime":     "/v1/node/runtime",
+	"Status":      "/v1/node/runtime/status",
+	"Logs":        "/v1/node/runtime/logs",
+	"AccessLogs":  "/v1/node/runtime/accesslogs",
+	"Config":      "/v1/node/runtime/config",
+	"Usage":       "/v1/node/runtime/usage",
+	"Start":       "/v1/node/runtime/start",
+	"Stop":        "/v1/node/runtime/stop",
+	"Restart":     "/v1/node/runtime/restart",
+	"AddUser":     "/v1/node/runtime/users/add",
+	"RemoveUser":  "/v1/node/runtime/users/remove",
+	"KickUser":    "/v1/node/runtime/users/kick",
+	"SpeedTest":   "/v1/node/speedtest",
 	"CheckUnlock": "/v1/node/check",
 }
 
