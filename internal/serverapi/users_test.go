@@ -312,21 +312,18 @@ func TestSyncUsageDisablesLimitedUserAndReloadsNode(t *testing.T) {
 	if !bob.EffectiveEnabled() {
 		t.Fatalf("expected bob to remain enabled")
 	}
-	// 删除被禁用的 alice 优先走 delta 路径（RemoveUser 热更新），不会触发全量 Restart。
-	if len(removedEmails) == 0 {
-		t.Fatalf("expected RemoveUser to be called for disabled user, got none")
+	// 超限用户必须走全量 Restart：xray 的 RemoveUser 只拒绝新连接，已建立的连接
+	// 会继续传输并计费，热删无法阻止超限用户继续跑流量。
+	if len(removedEmails) != 0 {
+		t.Fatalf("expected full restart for limited user, but RemoveUser was called: %v", removedEmails)
 	}
-	foundAlice := false
-	for _, e := range removedEmails {
-		if strings.Contains(e, "alice") {
-			foundAlice = true
-		}
-		if strings.Contains(e, "bob") {
-			t.Fatalf("did not expect bob to be removed, got %q", e)
-		}
+	if capturedConfig == "" {
+		t.Fatal("expected a full config restart, got none")
 	}
-	if !foundAlice {
-		t.Fatalf("expected alice to be removed via RemoveUser, got %v", removedEmails)
+	if strings.Contains(capturedConfig, "alice") {
+		t.Errorf("restarted config still contains limited user alice: %s", capturedConfig)
 	}
-	_ = capturedConfig
+	if !strings.Contains(capturedConfig, "bob") {
+		t.Errorf("restarted config dropped active user bob: %s", capturedConfig)
+	}
 }

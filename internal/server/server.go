@@ -96,6 +96,20 @@ func Run() error {
 			return err
 		},
 	})
+	// 兜底对账：SyncUsage 的变更下发只在状态翻转那一轮发生，目标节点当轮不可达
+	// 就会永久丢失（超限用户在该节点上无限可用）。self-sync 只在节点重连时对账，
+	// 长期在线的节点覆盖不到，故这里做周期性全量对账。
+	scheduler.Add(jobs.Job{
+		Name:     "reconcile-config",
+		Interval: 5 * time.Minute,
+		// 首次延迟：server 刚启动时节点尚未完成重连与 hello self-sync，
+		// 此时对账会把「还没来得及同步」误判为配置漂移，重启全网节点。
+		InitialDelay: 2 * time.Minute,
+		Fn: func(ctx context.Context) error {
+			_, err := jobs.ReconcileNodeConfigs(ctx, store, userStore, inboundStore, outboundStore, nodeAPI.Dial, applyOpts)
+			return err
+		},
+	})
 	scheduler.Add(jobs.Job{
 		Name:     "reset-traffic",
 		Interval: 1 * time.Minute,

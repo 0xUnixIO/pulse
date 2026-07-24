@@ -509,7 +509,12 @@ func SyncUsageWith(ctx context.Context, store users.Store, nodeStore nodes.Store
 
 		// 非故障恢复场景：优先用 AddUser/RemoveUser 热更新，避免全量重启断流。
 		// 若 delta 成功则跳过 ApplyNodeUsers；若失败则回退到全量重启（兜底）。
-		if !pa.recover && len(changedUsers) > 0 {
+		//
+		// 例外：本节点有用户转为不可用（超限 / 到期）时必须走全量重启。
+		// xray 的 RemoveUser 只把用户从 inbound validator 摘掉，已建立的连接会
+		// 继续传输且仍被 stats 计费——超限用户可借此跑出远超额度的流量。
+		// 重启只波及确实承载该用户的节点，其余节点仍走热更新。
+		if !pa.recover && len(changedUsers) > 0 && !nodeHasDisabledChange(nodeAccesses, changedUsers) {
 			if tryDeltaUsers(ctx, pa.client, nodeInbounds, nodeAccesses, applyMap, changedUsers) {
 				result.NodesReloaded++
 				continue
@@ -535,6 +540,20 @@ func SyncUsageWith(ctx context.Context, store users.Store, nodeStore nodes.Store
 	}
 
 	return result, nil
+}
+
+// nodeHasDisabledChange 判断该节点的用户列表里是否存在本轮转为不可用的用户。
+//
+// 这类用户不能只做热删：xray 的 RemoveUser 仅拒绝新连接，已建立的连接会继续
+// 传输并计入 stats，超限用户能一直跑到连接自然断开为止。只有全量重启才能真正
+// 断开存量连接。
+func nodeHasDisabledChange(nodeAccesses []users.UserInbound, changedUsers map[string]bool) bool {
+	for _, acc := range nodeAccesses {
+		if enabled, ok := changedUsers[acc.UserID]; ok && !enabled {
+			return true
+		}
+	}
+	return false
 }
 
 // tryDeltaUsers 通过 AddUser/RemoveUser 对节点做增量用户变更，避免全量重启。
