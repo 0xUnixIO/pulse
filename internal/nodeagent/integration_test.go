@@ -156,8 +156,8 @@ func TestIntegration_HelloAndCall(t *testing.T) {
 	}
 }
 
-// TestIntegration_UsagePushAck 端到端：node push usage_push → hub 自动 ack
-// → node 调 DoUsage(reset=true) 推进 baseline。
+// TestIntegration_UsagePushAck 端到端：node 原子读取并 reset usage →
+// push usage_push → hub 自动 ack → node 释放 pending 帧。
 func TestIntegration_UsagePushAck(t *testing.T) {
 	t.Parallel()
 	ph := &integrationPushHandler{}
@@ -207,7 +207,7 @@ func TestIntegration_UsagePushAck(t *testing.T) {
 		t.Fatalf("priming reset count=%d want 1", got)
 	}
 
-	// 第二次 tick：push；hub 自动 ack；节点端 ack 后再 reset。
+	// 第二次 tick：原子读取并 reset 后 push；hub 自动 ack。
 	pusher.tick(ctx)
 
 	deadline = time.Now().Add(3 * time.Second)
@@ -225,7 +225,7 @@ func TestIntegration_UsagePushAck(t *testing.T) {
 	if pusher.PendingCount() != 0 {
 		t.Fatalf("pending should be empty after ack, got %d", pusher.PendingCount())
 	}
-	if usageAPI.resets.Load() < 2 {
-		t.Fatalf("reset after ack count=%d want >=2", usageAPI.resets.Load())
+	if usageAPI.resets.Load() != 2 {
+		t.Fatalf("reset count=%d want 2", usageAPI.resets.Load())
 	}
 }

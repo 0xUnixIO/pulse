@@ -60,6 +60,24 @@ func TestSyncUsage_PushPath(t *testing.T) {
 	if usageCalls != 0 {
 		t.Errorf("expected no on-demand usage call (push path), got %d", usageCalls)
 	}
+
+	// The frame was drained, but this node is now permanently in push mode.
+	// Falling back to Usage(reset=true) here can race with the next in-flight
+	// push and account the same xray counters twice.
+	result, err = SyncUsageWith(context.Background(), userStore, nodeStore, inbounds.NewMemoryStore(), dial, ApplyOptions{}, nil, buf)
+	if err != nil {
+		t.Fatalf("second SyncUsageWith: %v", err)
+	}
+	if result.UsersUpdated != 0 {
+		t.Errorf("second UsersUpdated=%d, want 0; result=%+v", result.UsersUpdated, result)
+	}
+	if usageCalls != 0 {
+		t.Errorf("seen push node must not fall back to on-demand usage, got %d calls", usageCalls)
+	}
+	alice, _ = userStore.GetUser("u1")
+	if alice.UsedBytes != 100 {
+		t.Errorf("alice.UsedBytes after idle push cycle=%d, want 100", alice.UsedBytes)
+	}
 }
 
 // TestSyncUsage_OnDemandFallback 验证空 buffer 时仍走按需 hub 拉取（向后兼容）。

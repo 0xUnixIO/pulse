@@ -28,6 +28,12 @@ func TestUsageBuffer_AppendAndDrain(t *testing.T) {
 	if _, ok := b.Drain("n1"); ok {
 		t.Fatal("second drain should be empty")
 	}
+	if !b.HasSeen("n1") {
+		t.Fatal("node should remain marked as seen after drain")
+	}
+	if b.HasSeen("n2") {
+		t.Fatal("unknown node must not be marked as seen")
+	}
 }
 
 func TestUsageBuffer_DrainAll(t *testing.T) {

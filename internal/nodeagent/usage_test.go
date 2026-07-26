@@ -13,9 +13,9 @@ import (
 
 // mockUsageAPI 计数 DoUsage 调用，返回构造的 stats。
 type mockUsageAPI struct {
-	mu     sync.Mutex
-	calls  []bool // 每次调用的 reset 参数
-	stats  coremanager.UsageStats
+	mu    sync.Mutex
+	calls []bool // 每次调用的 reset 参数
+	stats coremanager.UsageStats
 }
 
 func (m *mockUsageAPI) DoUsage(reset bool) coremanager.UsageStats {
@@ -47,11 +47,17 @@ func (m *mockUsageAPI) resetCount() int {
 	return n
 }
 
+func (m *mockUsageAPI) callArgs() []bool {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	return append([]bool(nil), m.calls...)
+}
+
 // mockSender 记录 push 与提供 ack 控制。
 type mockSender struct {
-	mu      sync.Mutex
-	pushed  []uint64
-	ackCh   map[uint64]chan struct{}
+	mu       sync.Mutex
+	pushed   []uint64
+	ackCh    map[uint64]chan struct{}
 	failNext atomic.Bool
 }
 
@@ -124,7 +130,7 @@ func TestUsagePusher_PrimingFirstTickResetsNoPush(t *testing.T) {
 	}
 }
 
-func TestUsagePusher_PushAckThenReset(t *testing.T) {
+func TestUsagePusher_ResetWhenFrameCreatedThenAck(t *testing.T) {
 	t.Parallel()
 	api := &mockUsageAPI{}
 	sender := newMockSender()
@@ -140,19 +146,23 @@ func TestUsagePusher_PushAckThenReset(t *testing.T) {
 	if len(pushed) != 1 {
 		t.Fatalf("want 1 push, got %v", pushed)
 	}
+	if got := api.callArgs(); len(got) != 2 || !got[0] || !got[1] {
+		t.Fatalf("usage calls=%v, want two reset reads", got)
+	}
 	seq := pushed[0]
 	sender.ack(seq)
 
-	// 等到 ack 处理 goroutine 调 DoUsage(true)。
+	// ACK only releases the saved frame; it must not reset counters again,
+	// otherwise traffic accrued after frame creation would be discarded.
 	deadline := time.Now().Add(2 * time.Second)
 	for time.Now().Before(deadline) {
-		if api.resetCount() >= 2 && p.PendingCount() == 0 {
+		if p.PendingCount() == 0 {
 			break
 		}
 		time.Sleep(10 * time.Millisecond)
 	}
-	if api.resetCount() < 2 {
-		t.Fatalf("reset count after ack = %d, want >= 2", api.resetCount())
+	if got := api.callArgs(); len(got) != 2 {
+		t.Fatalf("ack unexpectedly read usage again: calls=%v", got)
 	}
 	if p.PendingCount() != 0 {
 		t.Fatalf("pending should be empty after ack, got %d", p.PendingCount())

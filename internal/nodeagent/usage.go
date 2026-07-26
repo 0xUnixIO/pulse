@@ -19,15 +19,15 @@ type UsageSnapshotProvider interface {
 	DoUsage(reset bool) coremanager.UsageStats
 }
 
-// UsagePusher 周期性把 usage delta 主动 push 给 server，并按 ack-before-reset
-// 协议在收到 ack 后才真正 reset xray 计数器。
+// UsagePusher 周期性把 usage delta 主动 push 给 server。创建新帧时原子读取并
+// reset xray 计数器，随后将帧保存在 pending 中直到 server ack。
 //
 // 重启容灾：第一次启动时先做一次 reset 清零 xray 累计计数（但不 push），
-// 避免上报历史累计数据；之后的轮次在无未 ack 帧时取当前累计快照并 push。
+// 避免上报历史累计数据；之后的轮次在无未 ack 帧时取当前 delta 并 push。
 //
 // 并发约束（防双计）：任意时刻最多 1 个未 ack 的 seq。若仍有 pending，
-// 本轮只重发旧帧，不取新快照、不分配新 seq——因为 DoUsage(false) 返回的是
-// 「自上次 reset 起的累计」，新 seq 会与旧帧语义重叠，server 按帧相加会虚高。
+// 本轮只重发旧帧，不取新快照、不分配新 seq。新产生的流量继续留在 xray
+// 计数器中，待旧帧 ack 后的下一轮再读取。
 type UsagePusher struct {
 	api      UsageSnapshotProvider
 	interval time.Duration
@@ -135,8 +135,9 @@ func (p *UsagePusher) tick(ctx context.Context) {
 		return
 	}
 
-	// 无 pending：取累计快照并 push 新 seq。
-	stats := p.api.DoUsage(false)
+	// 无 pending：原子读取并清零当前 delta，再 push 新 seq。即使同时发生
+	// reset-based fallback，两次读取也只会有一次拿到这批计数。
+	stats := p.api.DoUsage(true)
 	body, err := json.Marshal(stats)
 	if err != nil {
 		p.logger.Warn("nodeagent: marshal usage failed", "err", err)
@@ -151,7 +152,7 @@ func (p *UsagePusher) tick(ctx context.Context) {
 		return
 	}
 
-	// 异步等待 ack：成功 → DoUsage(true) 推进 baseline；超时 → 保留 pending 给下轮重发。
+	// 异步等待 ack：成功后删除 pending；超时则保留给下轮重发。
 	go func(s Sender, seq uint64) {
 		waitCtx, cancel := context.WithTimeout(ctx, p.ackWait)
 		defer cancel()
@@ -159,7 +160,6 @@ func (p *UsagePusher) tick(ctx context.Context) {
 			p.logger.Debug("nodeagent: usage ack timeout", "seq", seq, "err", err)
 			return
 		}
-		_ = p.api.DoUsage(true)
 		p.pending.Delete(seq)
 	}(sender, seq)
 }

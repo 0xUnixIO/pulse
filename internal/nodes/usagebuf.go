@@ -115,6 +115,16 @@ func (b *UsageBuffer) DrainAll() map[string]UsageStats {
 	return out
 }
 
+// HasSeen reports whether the node has successfully pushed at least one
+// sequenced usage frame. Once true, callers must not mix in reset-based pulls:
+// a pull racing with the next push can account the same xray counters twice.
+func (b *UsageBuffer) HasSeen(nodeID string) bool {
+	b.mu.Lock()
+	defer b.mu.Unlock()
+	_, ok := b.lastSeq[nodeID]
+	return ok
+}
+
 // SeenNodes 返回有过 push 记录的 nodeID 列表（即使当前 pending 为空也会包含）。
 // 用于诊断 / 监控。
 func (b *UsageBuffer) SeenNodes() []string {

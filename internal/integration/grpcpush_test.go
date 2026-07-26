@@ -561,7 +561,7 @@ func TestE2E_StreamLogsCancel(t *testing.T) {
 }
 
 // ─────────────────────────────────────────────────────────────────────────
-// 4. UsagePushAck: node UsagePusher → hub OnUsagePush → ack → baseline 推进
+// 4. UsagePushAck: node 原子读取/reset → hub OnUsagePush → ack
 // ─────────────────────────────────────────────────────────────────────────
 
 func TestE2E_UsagePushAck(t *testing.T) {
@@ -626,7 +626,7 @@ func TestE2E_UsagePushAck(t *testing.T) {
 	// 注入流量（priming 已把基线清零，现在加 100/200 形成真正的 delta）
 	provider.AddTraffic(100, 200)
 
-	// 第二次 tick → push usage_push（hub 自动 ack）→ pusher reset baseline
+	// 第二次 tick → 原子读取/reset → push usage_push（hub 自动 ack）
 	pusher.Tick(context.Background())
 	eventually(t, 3*time.Second, "ack received and baseline advanced", func() bool {
 		return pusher.PendingCount() == 0 && atomic.LoadInt32(&provider.resets) >= 2

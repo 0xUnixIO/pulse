@@ -127,7 +127,9 @@ func SyncUsage(ctx context.Context, store users.Store, nodeStore nodes.Store, ib
 }
 
 // SyncUsageWith 与 SyncUsage 相同，但额外接受 *nodes.UsageBuffer：
-// 优先按节点 Drain 消费 push delta；buffer 无数据时才回退到 c.Usage(ctx, true)。
+// 优先按节点 Drain 消费 push delta；仅从未 push 成功的节点才回退到
+// c.Usage(ctx, true)。已进入 push 模式的节点即使当前 buffer 暂时为空也不能拉取，
+// 否则拉取 reset 与在途 push 竞态时会把同一份 xray 计数重复入账。
 //
 // 记账与 dial 解耦：push 路径只要 buffer 有数据即可写库，不因 dial 失败丢弃
 // 已 push 的流量。禁用节点不参与本轮，其 buffer 帧保留到重新启用后再 Drain。
@@ -154,6 +156,7 @@ func SyncUsageWith(ctx context.Context, store users.Store, nodeStore nodes.Store
 		usage    nodes.UsageStats
 		hasUsage bool // 是否有可记账的 usage 快照
 		fromPush bool // 来自 push buffer（记账不依赖 dial）
+		pushIdle bool // 已进入 push 模式，但本轮尚无新帧
 		dialErr  error
 		usageErr error
 	}
@@ -171,6 +174,10 @@ func SyncUsageWith(ctx context.Context, store users.Store, nodeStore nodes.Store
 						node: n, client: c, usage: u,
 						hasUsage: true, fromPush: true, dialErr: dialErr,
 					}
+					return
+				}
+				if usageBuf.HasSeen(n.ID) {
+					fetched[idx] = nodeFetch{node: n, pushIdle: true}
 					return
 				}
 			}
@@ -224,6 +231,9 @@ func SyncUsageWith(ctx context.Context, store users.Store, nodeStore nodes.Store
 		// context 被取消（server 正在关闭）时跳过记录，避免把所有节点同时标记为离线
 		if ctx.Err() != nil {
 			break
+		}
+		if fr.pushIdle {
+			continue
 		}
 		// 记录本次可用性快照（无论节点是否正常，都写入一条记录）
 		online := fr.dialErr == nil && fr.usageErr == nil
