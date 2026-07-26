@@ -6,9 +6,10 @@ import (
 )
 
 var (
-	ErrUserNotFound        = errors.New("user not found")
-	ErrUserInboundNotFound = errors.New("user inbound not found")
-	ErrUsernameTaken       = errors.New("username already exists")
+	ErrUserNotFound           = errors.New("user not found")
+	ErrUserInboundNotFound    = errors.New("user inbound not found")
+	ErrUsernameTaken          = errors.New("username already exists")
+	ErrTrafficResetNotAllowed = errors.New("traffic reset not allowed")
 )
 
 const (
@@ -89,6 +90,8 @@ type SubAccessLog struct {
 type Store interface {
 	// User CRUD
 	UpsertUser(user User) (User, error)
+	// ResetTrafficForValidity 原子地清零累计流量并扣减有效期；不删除历史流量明细。
+	ResetTrafficForValidity(userID string, now time.Time, validityCostDays int) (User, error)
 	GetUser(id string) (User, error)
 	GetUserBySubToken(token string) (User, error)
 	GetUserByStripeCustomerID(customerID string) (User, error)

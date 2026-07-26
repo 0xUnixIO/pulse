@@ -38,6 +38,32 @@ func (s *MemoryStore) UpsertUser(user User) (User, error) {
 	return user, nil
 }
 
+func (s *MemoryStore) ResetTrafficForValidity(userID string, now time.Time, validityCostDays int) (User, error) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	user, ok := s.users[userID]
+	if !ok {
+		return User{}, ErrUserNotFound
+	}
+	if user.Status != StatusActive && user.Status != StatusLimited {
+		return User{}, ErrTrafficResetNotAllowed
+	}
+	if user.UploadBytes+user.DownloadBytes <= 0 || user.ExpireAt == nil ||
+		!user.ExpireAt.After(now.AddDate(0, 0, validityCostDays)) {
+		return User{}, ErrTrafficResetNotAllowed
+	}
+	expireAt := user.ExpireAt.AddDate(0, 0, -validityCostDays)
+	user.UploadBytes = 0
+	user.DownloadBytes = 0
+	user.UsedBytes = 0
+	user.RawUploadBytes = 0
+	user.RawDownloadBytes = 0
+	user.LastTrafficResetAt = &now
+	user.ExpireAt = &expireAt
+	s.users[userID] = user
+	return user, nil
+}
+
 func (s *MemoryStore) GetUser(id string) (User, error) {
 	s.mu.RLock()
 	defer s.mu.RUnlock()
@@ -313,8 +339,8 @@ func (s *MemoryStore) ListTodayUserNodeStats(username string) ([]TodayNodeStat, 
 }
 
 func (s *MemoryStore) ListHostExclusionsByUser(userID string) ([]string, error) { return nil, nil }
-func (s *MemoryStore) SetHostExclusion(userID, hostID string) error              { return nil }
-func (s *MemoryStore) ClearHostExclusion(userID, hostID string) error            { return nil }
+func (s *MemoryStore) SetHostExclusion(userID, hostID string) error             { return nil }
+func (s *MemoryStore) ClearHostExclusion(userID, hostID string) error           { return nil }
 
 // ─── 用户组 inbound 相关（内存 stub，仅测试用） ───────────────────────────────
 

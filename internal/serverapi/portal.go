@@ -1,8 +1,13 @@
 package serverapi
 
 import (
+	"context"
+	"crypto/rand"
+	"encoding/base64"
 	"encoding/json"
+	"errors"
 	"io"
+	"log"
 	"net/http"
 	"os"
 	"path/filepath"
@@ -13,6 +18,7 @@ import (
 	"pulse/internal/announcements"
 	"pulse/internal/idgen"
 	"pulse/internal/inbounds"
+	"pulse/internal/jobs"
 	"pulse/internal/nodes"
 	"pulse/internal/outbounds"
 	"pulse/internal/plans"
@@ -44,11 +50,13 @@ type portalAPI struct {
 	tickets       tickets.Store       // may be nil
 	sessions      PortalSessionStore
 	uploadsDir    string
+	dial          jobs.NodeDialer
+	applyOpts     jobs.ApplyOptions
 }
 
 // RegisterPortalAPI registers public user-portal endpoints (no admin auth).
-func RegisterPortalAPI(mux *http.ServeMux, us users.Store, ns nodes.Store, ibs inbounds.InboundStore, obs outbounds.Store, settings SettingsGetter, planStore plans.Store, annStore announcements.Store, ticketStore tickets.Store, sesStore PortalSessionStore, uploadsDir string) {
-	a := &portalAPI{users: us, nodes: ns, inbounds: ibs, outbounds: obs, settings: settings, plans: planStore, announcements: annStore, tickets: ticketStore, sessions: sesStore, uploadsDir: uploadsDir}
+func RegisterPortalAPI(mux *http.ServeMux, us users.Store, ns nodes.Store, ibs inbounds.InboundStore, obs outbounds.Store, settings SettingsGetter, planStore plans.Store, annStore announcements.Store, ticketStore tickets.Store, sesStore PortalSessionStore, uploadsDir string, dial jobs.NodeDialer, applyOpts jobs.ApplyOptions) {
+	a := &portalAPI{users: us, nodes: ns, inbounds: ibs, outbounds: obs, settings: settings, plans: planStore, announcements: annStore, tickets: ticketStore, sessions: sesStore, uploadsDir: uploadsDir, dial: dial, applyOpts: applyOpts}
 	mux.HandleFunc("GET /v1/portal/", a.handlePortal)
 	mux.HandleFunc("POST /v1/portal/", a.handlePortalPost)
 	// 账号密码登录端点（独立于 sub_token 路由）：返回 sub_token，前端跳转到 /user/:token。
@@ -76,7 +84,7 @@ func (a *portalAPI) handleUserLogin(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	_, hash, subToken, err := a.users.GetPasswordByUsername(req.Username)
+	userID, hash, subToken, err := a.users.GetPasswordByUsername(req.Username)
 	if err != nil {
 		writeJSON(w, http.StatusUnauthorized, map[string]any{"error": "invalid credentials"})
 		return
@@ -93,6 +101,29 @@ func (a *portalAPI) handleUserLogin(w http.ResponseWriter, r *http.Request) {
 		writeJSON(w, http.StatusInternalServerError, map[string]any{"error": "user has no sub_token"})
 		return
 	}
+	if a.sessions == nil {
+		writeJSON(w, http.StatusInternalServerError, map[string]any{"error": "portal session store unavailable"})
+		return
+	}
+	sessionBytes := make([]byte, 32)
+	if _, err := rand.Read(sessionBytes); err != nil {
+		writeJSON(w, http.StatusInternalServerError, map[string]any{"error": "failed to create session"})
+		return
+	}
+	sessionToken := base64.RawURLEncoding.EncodeToString(sessionBytes)
+	if err := a.sessions.Create(sessionToken, userID, time.Now().UTC().Add(24*time.Hour)); err != nil {
+		writeJSON(w, http.StatusInternalServerError, map[string]any{"error": "failed to create session"})
+		return
+	}
+	http.SetCookie(w, &http.Cookie{
+		Name:     "pulse_portal_session",
+		Value:    sessionToken,
+		Path:     "/",
+		MaxAge:   24 * 60 * 60,
+		HttpOnly: true,
+		Secure:   r.TLS != nil || r.Header.Get("X-Forwarded-Proto") == "https",
+		SameSite: http.SameSiteStrictMode,
+	})
 	writeJSON(w, http.StatusOK, map[string]any{"sub_token": subToken})
 }
 
@@ -189,9 +220,70 @@ func (a *portalAPI) handlePortalPost(w http.ResponseWriter, r *http.Request) {
 	switch subPath {
 	case "hosts/exclude":
 		a.handlePortalHostExclude(w, r, user)
+	case "reset-traffic":
+		a.handlePortalResetTraffic(w, r, user)
 	default:
 		writeJSON(w, http.StatusNotFound, map[string]any{"error": "route not found"})
 	}
+}
+
+// handlePortalResetTraffic 允许用户通过自己的门户凭据重置流量。
+func (a *portalAPI) handlePortalResetTraffic(w http.ResponseWriter, r *http.Request, user users.User) {
+	now := time.Now().UTC()
+	cookie, err := r.Cookie("pulse_portal_session")
+	if err != nil || a.sessions == nil {
+		writeJSON(w, http.StatusUnauthorized, map[string]any{"error": "请先使用账号密码登录"})
+		return
+	}
+	sessionUserID, ok := a.sessions.GetUserID(cookie.Value)
+	if !ok || sessionUserID != user.ID {
+		writeJSON(w, http.StatusUnauthorized, map[string]any{"error": "登录已过期，请重新登录"})
+		return
+	}
+	if user.Status != users.StatusActive && user.Status != users.StatusLimited {
+		writeJSON(w, http.StatusBadRequest, map[string]any{"error": "当前账户状态无法自助重置流量"})
+		return
+	}
+	if user.UploadBytes+user.DownloadBytes <= 0 {
+		writeJSON(w, http.StatusBadRequest, map[string]any{"error": "当前没有可重置的流量"})
+		return
+	}
+	if user.ExpireAt == nil {
+		writeJSON(w, http.StatusBadRequest, map[string]any{"error": "永久有效账户无法自助重置流量"})
+		return
+	}
+	if !user.ExpireAt.After(now.AddDate(0, 0, 30)) {
+		writeJSON(w, http.StatusBadRequest, map[string]any{"error": "剩余有效期不足 30 天，无法自助重置流量"})
+		return
+	}
+	if _, err := a.users.ResetTrafficForValidity(user.ID, now, 30); err != nil {
+		if errors.Is(err, users.ErrTrafficResetNotAllowed) {
+			writeJSON(w, http.StatusConflict, map[string]any{"error": "账户状态已变化，请刷新后重试"})
+			return
+		}
+		internalError(w, r, err)
+		return
+	}
+
+	accesses, err := a.users.ListUserInboundsByUser(user.ID)
+	if err != nil {
+		log.Printf("handlePortalResetTraffic: list user inbounds %s: %v", user.ID, err)
+	}
+	nodeIDs := make(map[string]struct{})
+	for _, access := range accesses {
+		nodeIDs[access.NodeID] = struct{}{}
+	}
+	for nodeID := range nodeIDs {
+		go func(id string) {
+			ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
+			defer cancel()
+			if err := jobs.ApplyNode(ctx, id, a.nodes, a.users, a.inbounds, a.outbounds, a.dial, a.applyOpts); err != nil {
+				log.Printf("handlePortalResetTraffic: apply node %s: %v", id, err)
+			}
+		}(nodeID)
+	}
+
+	writeJSON(w, http.StatusOK, map[string]any{"ok": true})
 }
 func (a *portalAPI) handlePortalInfo(w http.ResponseWriter, r *http.Request, user users.User) {
 	scheme := "https"
@@ -249,6 +341,7 @@ func (a *portalAPI) handlePortalInfo(w http.ResponseWriter, r *http.Request, use
 		"expire_at":              user.ExpireAt,
 		"nodes":                  nodeInfos,
 		"next_traffic_reset_at":  nextTrafficResetAt(user.DataLimitResetStrategy, user.CreatedAt, user.LastTrafficResetAt),
+		"traffic_reset_authenticated": a.portalSessionMatchesUser(r, user.ID),
 	}
 
 	// 公告列表：激活的排在最前面
@@ -282,6 +375,18 @@ func (a *portalAPI) handlePortalInfo(w http.ResponseWriter, r *http.Request, use
 	}
 
 	writeJSON(w, http.StatusOK, result)
+}
+
+func (a *portalAPI) portalSessionMatchesUser(r *http.Request, userID string) bool {
+	if a.sessions == nil {
+		return false
+	}
+	cookie, err := r.Cookie("pulse_portal_session")
+	if err != nil {
+		return false
+	}
+	sessionUserID, ok := a.sessions.GetUserID(cookie.Value)
+	return ok && sessionUserID == userID
 }
 
 func (a *portalAPI) handlePortalDailyUsage(w http.ResponseWriter, r *http.Request, user users.User) {

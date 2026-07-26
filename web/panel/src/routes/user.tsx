@@ -57,6 +57,7 @@ interface PortalInfo {
   data_limit: number;
   expire_at: string | null;
   next_traffic_reset_at: string | null;
+  traffic_reset_authenticated: boolean;
   nodes: { name: string; protocols: string[] }[];
   announcements?: Array<{ id: string; title: string; content: string; enabled: boolean; created_at: string }>;
   plan_name?: string;
@@ -471,6 +472,8 @@ export default function UserPage() {
   const [error, setError] = useState("");
   const [copied, setCopied] = useState<string | null>(null);
   const [resetting, setResetting] = useState(false);
+  const [resettingTraffic, setResettingTraffic] = useState(false);
+  const [resetTrafficConfirmOpen, setResetTrafficConfirmOpen] = useState(false);
   const [resetTokenConfirmOpen, setResetTokenConfirmOpen] = useState(false);
   const [repliedTicketCount, setRepliedTicketCount] = useState(0);
 
@@ -570,6 +573,25 @@ export default function UserPage() {
     }
   }
 
+  async function doResetTraffic() {
+    setResetTrafficConfirmOpen(false);
+    setResettingTraffic(true);
+    try {
+      const res = await fetch(`/v1/portal/${token}/reset-traffic`, { method: "POST" });
+      const data = await res.json();
+      if (!res.ok) throw new Error(data.error || "重置流量失败");
+
+      const infoRes = await fetch(`/v1/portal/${token}/info`);
+      if (!infoRes.ok) throw new Error("刷新账户信息失败");
+      setInfo(await infoRes.json());
+      toast("流量已重置", "success");
+    } catch (err) {
+      toast(err instanceof Error ? err.message : "重置流量失败", "error");
+    } finally {
+      setResettingTraffic(false);
+    }
+  }
+
   /* ── Loading / Error / Password states ───────────────────────── */
 
   if (loading) {
@@ -600,6 +622,16 @@ export default function UserPage() {
 
   const totalUsed = info.upload_bytes + info.download_bytes;
   const pct = usagePercent(totalUsed, info.data_limit);
+  const canResetTraffic =
+    !!info.expire_at &&
+    new Date(info.expire_at).getTime() > Date.now() + 30 * 24 * 60 * 60 * 1000;
+  const resetTrafficHint = !info.expire_at
+    ? "永久有效账户无法自助重置流量"
+    : !info.traffic_reset_authenticated
+      ? "请先通过账号密码登录后再重置流量"
+      : !canResetTraffic
+        ? "剩余有效期不足 30 天，无法自助重置流量"
+        : undefined;
 
   /* ── Chart data ──────────────────────────────────────────────── */
 
@@ -683,6 +715,24 @@ export default function UserPage() {
                     <span>↑ 上传 {formatBytes(info.upload_bytes)}</span>
                     <span>↓ 下载 {formatBytes(info.download_bytes)}</span>
                   </div>
+                  <Button
+                    variant="outline"
+                    size="sm"
+                    className="w-full"
+                    disabled={resettingTraffic || totalUsed === 0 || !canResetTraffic || !info.traffic_reset_authenticated}
+                    onClick={() => setResetTrafficConfirmOpen(true)}
+                    title={resetTrafficHint}
+                  >
+                    {resettingTraffic ? "重置中…" : "重置流量"}
+                  </Button>
+                  {!info.traffic_reset_authenticated && (
+                    <p className="text-center text-xs text-[hsl(var(--muted-foreground))]">
+                      为保护有效期，请先{" "}
+                      <a href="/user" className="text-[hsl(var(--primary))] hover:underline">
+                        使用账号密码登录
+                      </a>
+                    </p>
+                  )}
                 </div>
 
                 <div className="flex items-center gap-2 text-sm">
@@ -880,6 +930,16 @@ export default function UserPage() {
           </TabsContent>
         </Tabs>
       </div>
+
+      <ConfirmDialog
+        open={resetTrafficConfirmOpen}
+        onOpenChange={setResetTrafficConfirmOpen}
+        title="确认重置流量"
+        description="重置后，当前累计的上传和下载流量将立即清零，同时账户有效期减少 30 天。此操作无法撤销。"
+        confirmLabel="确认重置"
+        variant="destructive"
+        onConfirm={doResetTraffic}
+      />
 
       <ConfirmDialog
         open={resetTokenConfirmOpen}

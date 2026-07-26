@@ -68,6 +68,34 @@ func (s *UserStore) UpsertUser(user users.User) (users.User, error) {
 	return user, nil
 }
 
+func (s *UserStore) ResetTrafficForValidity(userID string, now time.Time, validityCostDays int) (users.User, error) {
+	tag, err := s.db.Exec(context.Background(), `
+		UPDATE users
+		SET upload_bytes = 0,
+		    download_bytes = 0,
+		    used_bytes = 0,
+		    raw_upload_bytes = 0,
+		    raw_download_bytes = 0,
+		    last_traffic_reset_at = $2,
+		    expire_at = (expire_at::timestamptz - make_interval(days => $3))::text
+		WHERE id = $1
+		  AND status IN ('active', 'limited')
+		  AND upload_bytes + download_bytes > 0
+		  AND expire_at IS NOT NULL
+		  AND expire_at::timestamptz > $2::timestamptz + make_interval(days => $3)
+	`, userID, now.Format(time.RFC3339Nano), validityCostDays)
+	if err != nil {
+		return users.User{}, fmt.Errorf("reset traffic for validity: %w", err)
+	}
+	if tag.RowsAffected() == 0 {
+		if _, err := s.GetUser(userID); err != nil {
+			return users.User{}, err
+		}
+		return users.User{}, users.ErrTrafficResetNotAllowed
+	}
+	return s.GetUser(userID)
+}
+
 func (s *UserStore) GetUser(id string) (users.User, error) {
 	row, err := sqlcgen.New(s.db).GetUserByID(context.Background(), id)
 	if errors.Is(err, pgx.ErrNoRows) {

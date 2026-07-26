@@ -1225,7 +1225,7 @@ func Run() error {
 	mux.Handle("/v1/auth/credentials", authManager.Middleware(protectedV1))
 
 	// Public portal API (no admin auth, uses sub_token)
-	serverapi.RegisterPortalAPI(mux, userStore, store, inboundStore, outboundStore, settingsStore, db.PlanStore(), annStore, ticketStore, db.PortalSessionStore(), uploadsDir)
+	serverapi.RegisterPortalAPI(mux, userStore, store, inboundStore, outboundStore, settingsStore, db.PlanStore(), annStore, ticketStore, db.PortalSessionStore(), uploadsDir, nodeAPI.Dial, applyOpts)
 
 	// 节点自注册（公开，仅用于节点上报 BaseURL；mTLS 客户端证书已由 enrollment 流程取代）
 	serverapi.RegisterNodeRegisterAPI(mux, store, nodeAPI2.EvictClient)
