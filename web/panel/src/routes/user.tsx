@@ -57,7 +57,6 @@ interface PortalInfo {
   data_limit: number;
   expire_at: string | null;
   next_traffic_reset_at: string | null;
-  traffic_reset_authenticated: boolean;
   nodes: { name: string; protocols: string[] }[];
   announcements?: Array<{ id: string; title: string; content: string; enabled: boolean; created_at: string }>;
   plan_name?: string;
@@ -625,10 +624,11 @@ export default function UserPage() {
   const canResetTraffic =
     !!info.expire_at &&
     new Date(info.expire_at).getTime() > Date.now() + 30 * 24 * 60 * 60 * 1000;
+  const canResetTrafficStatus = info.status === "active" || info.status === "limited";
   const resetTrafficHint = !info.expire_at
     ? "永久有效账户无法自助重置流量"
-    : !info.traffic_reset_authenticated
-      ? "请先通过账号密码登录后再重置流量"
+    : !canResetTrafficStatus
+      ? "当前账户状态无法自助重置流量"
       : !canResetTraffic
         ? "剩余有效期不足 30 天，无法自助重置流量"
         : undefined;
@@ -719,20 +719,12 @@ export default function UserPage() {
                     variant="outline"
                     size="sm"
                     className="w-full"
-                    disabled={resettingTraffic || totalUsed === 0 || !canResetTraffic || !info.traffic_reset_authenticated}
+                    disabled={resettingTraffic || totalUsed === 0 || !canResetTraffic || !canResetTrafficStatus}
                     onClick={() => setResetTrafficConfirmOpen(true)}
                     title={resetTrafficHint}
                   >
                     {resettingTraffic ? "重置中…" : "重置流量"}
                   </Button>
-                  {!info.traffic_reset_authenticated && (
-                    <p className="text-center text-xs text-[hsl(var(--muted-foreground))]">
-                      为保护有效期，请先{" "}
-                      <a href="/user" className="text-[hsl(var(--primary))] hover:underline">
-                        使用账号密码登录
-                      </a>
-                    </p>
-                  )}
                 </div>
 
                 <div className="flex items-center gap-2 text-sm">

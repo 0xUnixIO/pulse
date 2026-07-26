@@ -2,8 +2,6 @@ package serverapi
 
 import (
 	"context"
-	"crypto/rand"
-	"encoding/base64"
 	"encoding/json"
 	"errors"
 	"io"
@@ -84,7 +82,7 @@ func (a *portalAPI) handleUserLogin(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	userID, hash, subToken, err := a.users.GetPasswordByUsername(req.Username)
+	_, hash, subToken, err := a.users.GetPasswordByUsername(req.Username)
 	if err != nil {
 		writeJSON(w, http.StatusUnauthorized, map[string]any{"error": "invalid credentials"})
 		return
@@ -101,29 +99,6 @@ func (a *portalAPI) handleUserLogin(w http.ResponseWriter, r *http.Request) {
 		writeJSON(w, http.StatusInternalServerError, map[string]any{"error": "user has no sub_token"})
 		return
 	}
-	if a.sessions == nil {
-		writeJSON(w, http.StatusInternalServerError, map[string]any{"error": "portal session store unavailable"})
-		return
-	}
-	sessionBytes := make([]byte, 32)
-	if _, err := rand.Read(sessionBytes); err != nil {
-		writeJSON(w, http.StatusInternalServerError, map[string]any{"error": "failed to create session"})
-		return
-	}
-	sessionToken := base64.RawURLEncoding.EncodeToString(sessionBytes)
-	if err := a.sessions.Create(sessionToken, userID, time.Now().UTC().Add(24*time.Hour)); err != nil {
-		writeJSON(w, http.StatusInternalServerError, map[string]any{"error": "failed to create session"})
-		return
-	}
-	http.SetCookie(w, &http.Cookie{
-		Name:     "pulse_portal_session",
-		Value:    sessionToken,
-		Path:     "/",
-		MaxAge:   24 * 60 * 60,
-		HttpOnly: true,
-		Secure:   r.TLS != nil || r.Header.Get("X-Forwarded-Proto") == "https",
-		SameSite: http.SameSiteStrictMode,
-	})
 	writeJSON(w, http.StatusOK, map[string]any{"sub_token": subToken})
 }
 
@@ -230,16 +205,6 @@ func (a *portalAPI) handlePortalPost(w http.ResponseWriter, r *http.Request) {
 // handlePortalResetTraffic 允许用户通过自己的门户凭据重置流量。
 func (a *portalAPI) handlePortalResetTraffic(w http.ResponseWriter, r *http.Request, user users.User) {
 	now := time.Now().UTC()
-	cookie, err := r.Cookie("pulse_portal_session")
-	if err != nil || a.sessions == nil {
-		writeJSON(w, http.StatusUnauthorized, map[string]any{"error": "请先使用账号密码登录"})
-		return
-	}
-	sessionUserID, ok := a.sessions.GetUserID(cookie.Value)
-	if !ok || sessionUserID != user.ID {
-		writeJSON(w, http.StatusUnauthorized, map[string]any{"error": "登录已过期，请重新登录"})
-		return
-	}
 	if user.Status != users.StatusActive && user.Status != users.StatusLimited {
 		writeJSON(w, http.StatusBadRequest, map[string]any{"error": "当前账户状态无法自助重置流量"})
 		return
@@ -340,8 +305,7 @@ func (a *portalAPI) handlePortalInfo(w http.ResponseWriter, r *http.Request, use
 		"data_limit":             user.TrafficLimit,
 		"expire_at":              user.ExpireAt,
 		"nodes":                  nodeInfos,
-		"next_traffic_reset_at":  nextTrafficResetAt(user.DataLimitResetStrategy, user.CreatedAt, user.LastTrafficResetAt),
-		"traffic_reset_authenticated": a.portalSessionMatchesUser(r, user.ID),
+		"next_traffic_reset_at": nextTrafficResetAt(user.DataLimitResetStrategy, user.CreatedAt, user.LastTrafficResetAt),
 	}
 
 	// 公告列表：激活的排在最前面
@@ -375,18 +339,6 @@ func (a *portalAPI) handlePortalInfo(w http.ResponseWriter, r *http.Request, use
 	}
 
 	writeJSON(w, http.StatusOK, result)
-}
-
-func (a *portalAPI) portalSessionMatchesUser(r *http.Request, userID string) bool {
-	if a.sessions == nil {
-		return false
-	}
-	cookie, err := r.Cookie("pulse_portal_session")
-	if err != nil {
-		return false
-	}
-	sessionUserID, ok := a.sessions.GetUserID(cookie.Value)
-	return ok && sessionUserID == userID
 }
 
 func (a *portalAPI) handlePortalDailyUsage(w http.ResponseWriter, r *http.Request, user users.User) {
