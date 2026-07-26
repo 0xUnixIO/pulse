@@ -227,13 +227,8 @@ func (d *WebhookDeps) renewExistingUser(order orders.Order, plan plans.Plan, now
 			return
 		}
 
-		// 到期时间：未过期则从当前到期时间延长，已过期则从现在起算
-		notExpired := user.ExpireAt != nil && user.ExpireAt.After(now)
-		base := now
-		if notExpired {
-			base = *user.ExpireAt
-		}
-		expireAt := base.Add(time.Duration(plan.DurationDays) * 24 * time.Hour)
+		// 未过期时以旧到期时间为续费和流量周期锚点；已过期时从当前时间重新起算。
+		expireAt, resetAnchor := renewalTimes(user.ExpireAt, plan.DurationDays, now)
 		user.ExpireAt = &expireAt
 
 		// 流量：剩余量叠加到新套餐额度，清零计数器以保证 SyncUsage delta 正确
@@ -252,12 +247,7 @@ func (d *WebhookDeps) renewExistingUser(order orders.Order, plan plans.Plan, now
 		user.UsedBytes = 0
 		user.RawUploadBytes = 0
 		user.RawDownloadBytes = 0
-		// 未过期续费时以旧 ExpireAt 为锚点，确保下次定时重置与套餐周期对齐
-		if notExpired {
-			user.LastTrafficResetAt = user.ExpireAt
-		} else {
-			user.LastTrafficResetAt = &now
-		}
+		user.LastTrafficResetAt = &resetAnchor
 		user.DataLimitResetStrategy = plan.DataLimitResetStrategy
 		user.CurrentPlanID = plan.ID
 		user.Status = users.StatusActive
@@ -357,12 +347,9 @@ func (d *WebhookDeps) handleInvoicePaid(event stripe.Event) {
 		userID = user.ID
 
 		now := time.Now().UTC()
-		base := now
-		if user.ExpireAt != nil && user.ExpireAt.After(now) {
-			base = *user.ExpireAt
-		}
-		expireAt := base.Add(time.Duration(plan.DurationDays) * 24 * time.Hour)
+		expireAt, resetAnchor := renewalTimes(user.ExpireAt, plan.DurationDays, now)
 		user.ExpireAt = &expireAt
+		user.LastTrafficResetAt = &resetAnchor
 		user.Status = users.StatusActive
 
 		// 流量：剩余量叠加到套餐额度，清零计数器以保证 SyncUsage delta 正确
@@ -400,6 +387,17 @@ func (d *WebhookDeps) handleInvoicePaid(event stripe.Event) {
 	if d.ApplyUserNodes != nil && userID != "" {
 		go d.ApplyUserNodes(userID)
 	}
+}
+
+// renewalTimes 计算续费后的到期时间和流量重置周期锚点。
+// 未过期账户沿用旧到期日作为锚点，已过期或永久账户从本次履约时间重新起算。
+func renewalTimes(currentExpireAt *time.Time, durationDays int, now time.Time) (expireAt, resetAnchor time.Time) {
+	resetAnchor = now
+	if currentExpireAt != nil && currentExpireAt.After(now) {
+		resetAnchor = *currentExpireAt
+	}
+	expireAt = resetAnchor.Add(time.Duration(durationDays) * 24 * time.Hour)
+	return expireAt, resetAnchor
 }
 
 func (d *WebhookDeps) handleInvoicePaymentFailed(event stripe.Event) {

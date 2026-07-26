@@ -204,3 +204,43 @@ func TestProvisionNewUser_GeneratesVlessCredentials(t *testing.T) {
 		t.Error("expected Secret to be generated for new user (required for trojan/anytls/shadowsocks), got empty string")
 	}
 }
+
+func TestRenewalTimes(t *testing.T) {
+	now := time.Date(2026, 7, 26, 12, 0, 0, 0, time.UTC)
+
+	t.Run("未过期账户沿用旧到期日作为周期锚点", func(t *testing.T) {
+		currentExpireAt := time.Date(2026, 8, 1, 12, 0, 0, 0, time.UTC)
+		expireAt, resetAnchor := renewalTimes(&currentExpireAt, 60, now)
+
+		if !resetAnchor.Equal(currentExpireAt) {
+			t.Fatalf("reset anchor = %v, want old expire_at %v", resetAnchor, currentExpireAt)
+		}
+		wantExpireAt := currentExpireAt.Add(60 * 24 * time.Hour)
+		if !expireAt.Equal(wantExpireAt) {
+			t.Fatalf("expire_at = %v, want %v", expireAt, wantExpireAt)
+		}
+	})
+
+	t.Run("已过期账户从履约时间重新起算", func(t *testing.T) {
+		currentExpireAt := now.Add(-24 * time.Hour)
+		expireAt, resetAnchor := renewalTimes(&currentExpireAt, 30, now)
+
+		if !resetAnchor.Equal(now) {
+			t.Fatalf("reset anchor = %v, want now %v", resetAnchor, now)
+		}
+		if want := now.Add(30 * 24 * time.Hour); !expireAt.Equal(want) {
+			t.Fatalf("expire_at = %v, want %v", expireAt, want)
+		}
+	})
+
+	t.Run("永久账户从履约时间开始套餐周期", func(t *testing.T) {
+		expireAt, resetAnchor := renewalTimes(nil, 30, now)
+
+		if !resetAnchor.Equal(now) {
+			t.Fatalf("reset anchor = %v, want now %v", resetAnchor, now)
+		}
+		if want := now.Add(30 * 24 * time.Hour); !expireAt.Equal(want) {
+			t.Fatalf("expire_at = %v, want %v", expireAt, want)
+		}
+	})
+}
