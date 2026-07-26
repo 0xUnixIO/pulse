@@ -37,6 +37,11 @@ type userAPI struct {
 	sessions      PortalSessionStore // 可为 nil，nil 时跳过 session 失效
 }
 
+type userListItem struct {
+	users.User
+	EffectiveStatus string `json:"effective_status"`
+}
+
 type createUserRequest struct {
 	ID                     string     `json:"id"`
 	Username               string     `json:"username"`
@@ -99,7 +104,14 @@ func (a *userAPI) handleUsers(w http.ResponseWriter, r *http.Request) {
 			return
 		}
 		items, total := filterUsersByQuery(all, r)
-		writeJSON(w, http.StatusOK, map[string]any{"users": items, "total": total})
+		responseItems := make([]userListItem, 0, len(items))
+		for _, user := range items {
+			responseItems = append(responseItems, userListItem{
+				User:            user,
+				EffectiveStatus: user.EffectiveStatus(),
+			})
+		}
+		writeJSON(w, http.StatusOK, map[string]any{"users": responseItems, "total": total})
 	case http.MethodPost:
 		var req createUserRequest
 		if err := json.NewDecoder(r.Body).Decode(&req); err != nil {

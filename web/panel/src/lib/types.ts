@@ -109,6 +109,7 @@ export interface User {
   id: string;
   username: string;
   status: UserStatus;
+  effective_status?: UserStatus;
   note: string;
   expire_at?: string;
   data_limit_reset_strategy: ResetStrategy;

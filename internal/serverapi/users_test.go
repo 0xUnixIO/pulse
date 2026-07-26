@@ -68,6 +68,35 @@ func createUserInbound(t *testing.T, mux *http.ServeMux, userID, inboundID strin
 	return out["id"].(string)
 }
 
+func TestUserListItemReportsEffectiveStatus(t *testing.T) {
+	user := users.User{
+		ID:           "u1",
+		Username:     "alice",
+		Status:       users.StatusActive,
+		TrafficLimit: 100,
+		UsedBytes:    120,
+	}
+	item := userListItem{User: user, EffectiveStatus: user.EffectiveStatus()}
+
+	data, err := json.Marshal(item)
+	if err != nil {
+		t.Fatalf("marshal user list item: %v", err)
+	}
+	var response struct {
+		Status          string `json:"status"`
+		EffectiveStatus string `json:"effective_status"`
+	}
+	if err := json.Unmarshal(data, &response); err != nil {
+		t.Fatalf("unmarshal user list item: %v", err)
+	}
+	if response.Status != users.StatusActive {
+		t.Fatalf("stored status=%q, want active", response.Status)
+	}
+	if response.EffectiveStatus != users.StatusLimited {
+		t.Fatalf("effective status=%q, want limited", response.EffectiveStatus)
+	}
+}
+
 func TestUserSubscriptionAndApplyFlow(t *testing.T) {
 	var capturedConfig string
 	mux, ibStore := setupTestMux(t, map[string]func(body any) (json.RawMessage, error){

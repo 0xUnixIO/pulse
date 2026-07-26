@@ -615,7 +615,7 @@ export default function UsersPage() {
     const rawTotal = user.raw_upload_bytes + user.raw_download_bytes;
     const ratio = user.traffic_limit_bytes > 0 ? user.used_bytes / user.traffic_limit_bytes : 0;
     const trafficColor =
-      user.status === "limited" || ratio >= 1
+      user.effective_status === "limited" || ratio >= 1
         ? "text-red-500"
         : ratio >= 0.8
           ? "text-orange-500"
@@ -803,9 +803,11 @@ export default function UsersPage() {
                   </TableCell>
                   <TableCell className="px-4 whitespace-nowrap">
                     <div className="flex items-center gap-1.5">
-                      <span className={`h-2 w-2 shrink-0 rounded-full ${STATUS_DOT[user.status] ?? "bg-[hsl(var(--muted-foreground))]"}`} />
+                      <span className={`h-2 w-2 shrink-0 rounded-full ${STATUS_DOT[user.effective_status ?? user.status] ?? "bg-[hsl(var(--muted-foreground))]"}`} />
                       <div className="flex flex-col">
-                        <span className="text-sm text-[hsl(var(--foreground))]">{STATUS_LABEL[user.status] ?? user.status}</span>
+                        <span className="text-sm text-[hsl(var(--foreground))]">
+                          {STATUS_LABEL[user.effective_status ?? user.status] ?? user.effective_status ?? user.status}
+                        </span>
                         {user.online_at && (
                           <span className="text-xs text-[hsl(var(--muted-foreground))]">{formatOnlineAt(user.online_at)}</span>
                         )}
