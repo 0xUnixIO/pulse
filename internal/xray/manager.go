@@ -119,6 +119,11 @@ type Manager struct {
 	nodeUpBps   int64
 	nodeDownBps int64
 	samplerStop chan struct{} // 关闭此 channel 停止采样协程
+
+	netStatsMu    sync.Mutex
+	netRxBaseline int64
+	netTxBaseline int64
+	netStatsReady bool
 }
 
 // NewManager 创建 Manager。
@@ -200,6 +205,8 @@ func (m *Manager) Start(config string) error {
 	m.appendLogLocked("xray started (in-process, version " + xrayCore.Version() + ")")
 	configFile := m.configFile
 	m.mu.Unlock()
+
+	m.resetNetworkBaseline()
 
 	// 启动网速采样 goroutine
 	go m.runSpeedSampler(stopCh)
@@ -310,7 +317,7 @@ func (m *Manager) Status() coremanager.Status {
 	}
 }
 
-// Usage 通过 xray-core stats.Manager 查询用户流量（in-process，无 gRPC 网络开销）。
+// Usage 通过 xray-core stats.Manager 查询用户和入站流量（in-process，无 gRPC 网络开销）。
 func (m *Manager) Usage(reset bool) coremanager.UsageStats {
 	m.mu.Lock()
 	instance := m.instance
@@ -328,10 +335,8 @@ func (m *Manager) Usage(reset bool) coremanager.UsageStats {
 		return result
 	}
 
-	if reset {
-		m.resetMu.Lock()
-		defer m.resetMu.Unlock()
-	}
+	m.resetMu.Lock()
+	defer m.resetMu.Unlock()
 
 	// 从 in-process 实例中获取 stats.Manager
 	sm, ok := instance.GetFeature(stats.ManagerType()).(stats.Manager)
@@ -345,44 +350,16 @@ func (m *Manager) Usage(reset bool) coremanager.UsageStats {
 	defer cancel()
 
 	resp, err := handler.QueryStats(ctx, &command.QueryStatsRequest{
-		Pattern: "user>>>",
+		Pattern: ">>>traffic>>>",
 		Reset_:  reset,
 	})
 	if err != nil {
+		m.applyNetworkTraffic(&result, reset)
 		return result
 	}
 
-	userTraffic := make(map[string]*coremanager.UserUsage)
-	for _, stat := range resp.GetStat() {
-		if stat == nil {
-			continue
-		}
-		// stat.Name 格式: "user>>>alice@@@vless-443>>>traffic>>>uplink"
-		parts := strings.SplitN(stat.GetName(), ">>>", 4)
-		if len(parts) != 4 || parts[0] != "user" {
-			continue
-		}
-		username := parts[1]
-		direction := parts[3]
-
-		uu, exists := userTraffic[username]
-		if !exists {
-			uu = &coremanager.UserUsage{User: username}
-			userTraffic[username] = uu
-		}
-		switch direction {
-		case "uplink":
-			uu.UploadTotal = stat.GetValue()
-		case "downlink":
-			uu.DownloadTotal = stat.GetValue()
-		}
-	}
-
-	for _, uu := range userTraffic {
-		result.Users = append(result.Users, *uu)
-		result.UploadTotal += uu.UploadTotal
-		result.DownloadTotal += uu.DownloadTotal
-	}
+	applyTrafficStats(&result, resp.GetStat())
+	m.applyNetworkTraffic(&result, reset)
 
 	// 填入实时速度
 	m.speedMu.RLock()
@@ -448,6 +425,106 @@ func (m *Manager) Usage(reset bool) coremanager.UsageStats {
 	})
 
 	return result
+}
+
+func applyTrafficStats(result *coremanager.UsageStats, statsList []*command.Stat) {
+	userTraffic := make(map[string]*coremanager.UserUsage)
+	var inboundUpload, inboundDownload int64
+	hasInboundStats := false
+
+	for _, stat := range statsList {
+		if stat == nil {
+			continue
+		}
+		parts := strings.SplitN(stat.GetName(), ">>>", 4)
+		if len(parts) != 4 || parts[2] != "traffic" {
+			continue
+		}
+		direction := parts[3]
+
+		switch parts[0] {
+		case "user":
+			username := parts[1]
+			uu, exists := userTraffic[username]
+			if !exists {
+				uu = &coremanager.UserUsage{User: username}
+				userTraffic[username] = uu
+			}
+			switch direction {
+			case "uplink":
+				uu.UploadTotal = stat.GetValue()
+			case "downlink":
+				uu.DownloadTotal = stat.GetValue()
+			}
+		case "inbound":
+			hasInboundStats = true
+			switch direction {
+			case "uplink":
+				inboundUpload += stat.GetValue()
+			case "downlink":
+				inboundDownload += stat.GetValue()
+			}
+		}
+	}
+
+	var userUpload, userDownload int64
+	for _, uu := range userTraffic {
+		result.Users = append(result.Users, *uu)
+		userUpload += uu.UploadTotal
+		userDownload += uu.DownloadTotal
+	}
+
+	if hasInboundStats {
+		result.UploadTotal = inboundUpload
+		result.DownloadTotal = inboundDownload
+		return
+	}
+	result.UploadTotal = userUpload
+	result.DownloadTotal = userDownload
+}
+
+func (m *Manager) resetNetworkBaseline() {
+	rx, tx, err := readNetStats()
+	if err != nil {
+		return
+	}
+	m.netStatsMu.Lock()
+	m.netRxBaseline = rx
+	m.netTxBaseline = tx
+	m.netStatsReady = true
+	m.netStatsMu.Unlock()
+}
+
+func (m *Manager) applyNetworkTraffic(result *coremanager.UsageStats, reset bool) {
+	rx, tx, err := readNetStats()
+	if err != nil {
+		m.netStatsMu.Lock()
+		networkSourceActive := m.netStatsReady
+		m.netStatsMu.Unlock()
+		if networkSourceActive {
+			// 保留 baseline，待下次读取成功时一次性结算，避免回退到 Xray
+			// 统计后又被网卡累计差值重复记账。
+			result.UploadTotal = 0
+			result.DownloadTotal = 0
+		}
+		return
+	}
+
+	m.netStatsMu.Lock()
+	defer m.netStatsMu.Unlock()
+	if !m.netStatsReady || rx < m.netRxBaseline || tx < m.netTxBaseline {
+		m.netRxBaseline = rx
+		m.netTxBaseline = tx
+		m.netStatsReady = true
+		return
+	}
+
+	result.UploadTotal = tx - m.netTxBaseline
+	result.DownloadTotal = rx - m.netRxBaseline
+	if reset {
+		m.netRxBaseline = rx
+		m.netTxBaseline = tx
+	}
 }
 
 // Version 返回内嵌的 xray-core 版本字符串。
@@ -767,7 +844,40 @@ func stripAPIListen(config string) string {
 	return config
 }
 
-// readNetStats 读取 /proc/net/dev，返回所有非 lo 网卡的累计 rx/tx 字节数。
+// defaultRouteInterface 返回 IPv4 默认路由对应的网卡名。
+func defaultRouteInterface() string {
+	f, err := os.Open("/proc/net/route")
+	if err != nil {
+		return ""
+	}
+	defer f.Close()
+
+	bestIface := ""
+	bestMetric := int64(1<<63 - 1)
+	scanner := bufio.NewScanner(f)
+	scanner.Scan() // 跳过表头
+	for scanner.Scan() {
+		fields := strings.Fields(scanner.Text())
+		if len(fields) < 8 || fields[1] != "00000000" {
+			continue
+		}
+		flags, err := strconv.ParseInt(fields[3], 16, 64)
+		if err != nil || flags&1 == 0 {
+			continue
+		}
+		metric, err := strconv.ParseInt(fields[6], 10, 64)
+		if err != nil {
+			continue
+		}
+		if metric < bestMetric {
+			bestIface = fields[0]
+			bestMetric = metric
+		}
+	}
+	return bestIface
+}
+
+// readNetStats 读取 /proc/net/dev，优先返回默认路由网卡的累计 rx/tx 字节数。
 func readNetStats() (rx, tx int64, err error) {
 	f, err := os.Open("/proc/net/dev")
 	if err != nil {
@@ -775,6 +885,7 @@ func readNetStats() (rx, tx int64, err error) {
 	}
 	defer f.Close()
 
+	defaultIface := defaultRouteInterface()
 	scanner := bufio.NewScanner(f)
 	scanner.Scan() // 跳过表头第一行
 	scanner.Scan() // 跳过表头第二行
@@ -785,7 +896,7 @@ func readNetStats() (rx, tx int64, err error) {
 			continue
 		}
 		iface := strings.TrimSpace(line[:colon])
-		if iface == "lo" {
+		if iface == "lo" || (defaultIface != "" && iface != defaultIface) {
 			continue
 		}
 		fields := strings.Fields(line[colon+1:])

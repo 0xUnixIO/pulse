@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"sync"
 	"testing"
+	"time"
 )
 
 func TestUsageBuffer_AppendAndDrain(t *testing.T) {
@@ -33,6 +34,28 @@ func TestUsageBuffer_AppendAndDrain(t *testing.T) {
 	}
 	if b.HasSeen("n2") {
 		t.Fatal("unknown node must not be marked as seen")
+	}
+}
+
+func TestUsageBuffer_HasRecentPush(t *testing.T) {
+	b := NewUsageBuffer()
+	now := time.Now()
+	if b.HasRecentPush("n1", now, time.Minute) {
+		t.Fatal("unknown node must not have a recent push")
+	}
+
+	_ = b.Append("n1", 1, UsageStats{})
+	if !b.HasRecentPush("n1", time.Now(), time.Minute) {
+		t.Fatal("newly appended sequenced frame must be recent")
+	}
+	if b.HasRecentPush("n1", time.Now().Add(4*time.Minute), 3*time.Minute) {
+		t.Fatal("silent node must stop being treated as an active push node")
+	}
+
+	// Requeued local data is not a node push and must not extend the window.
+	b.Requeue("n2", UsageStats{})
+	if b.HasRecentPush("n2", time.Now(), time.Minute) {
+		t.Fatal("requeued data must not mark node as actively pushing")
 	}
 }
 

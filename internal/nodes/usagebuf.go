@@ -2,6 +2,7 @@ package nodes
 
 import (
 	"sync"
+	"time"
 )
 
 // UsageBuffer 缓存来自 node 主动 push 的 usage 数据。
@@ -16,9 +17,10 @@ import (
 //
 // 所有方法 goroutine-safe。
 type UsageBuffer struct {
-	mu      sync.Mutex
-	pending map[string][]usageEntry // nodeID → 待消费帧列表
-	lastSeq map[string]uint64       // nodeID → 已合并入 pending 的最大 seq
+	mu         sync.Mutex
+	pending    map[string][]usageEntry // nodeID → 待消费帧列表
+	lastSeq    map[string]uint64       // nodeID → 已合并入 pending 的最大 seq
+	lastPushAt map[string]time.Time    // nodeID → 最近一次收到 sequenced push 的时间
 }
 
 type usageEntry struct {
@@ -29,8 +31,9 @@ type usageEntry struct {
 // NewUsageBuffer 构造一个空 buffer。
 func NewUsageBuffer() *UsageBuffer {
 	return &UsageBuffer{
-		pending: make(map[string][]usageEntry),
-		lastSeq: make(map[string]uint64),
+		pending:    make(map[string][]usageEntry),
+		lastSeq:    make(map[string]uint64),
+		lastPushAt: make(map[string]time.Time),
 	}
 }
 
@@ -52,6 +55,10 @@ func (b *UsageBuffer) Append(nodeID string, seq uint64, delta UsageStats) error 
 	}
 	b.mu.Lock()
 	defer b.mu.Unlock()
+	// 重复帧不能再次入账，但仍证明节点的主动上报链路可用。
+	if seq != 0 {
+		b.lastPushAt[nodeID] = time.Now()
+	}
 	if last, ok := b.lastSeq[nodeID]; ok && seq != 0 && seq <= last {
 		if last-seq >= seqEpochGap {
 			// 节点重启：seq 从低位重新计数，开启新纪元。
@@ -123,6 +130,19 @@ func (b *UsageBuffer) HasSeen(nodeID string) bool {
 	defer b.mu.Unlock()
 	_, ok := b.lastSeq[nodeID]
 	return ok
+}
+
+// HasRecentPush 返回节点是否在 maxAge 内发送过 sequenced push。
+// 节点静默后必须回退为主动拉取，避免一次过期 push 让 Xray 计数永久无法入库。
+func (b *UsageBuffer) HasRecentPush(nodeID string, now time.Time, maxAge time.Duration) bool {
+	if b == nil || nodeID == "" || maxAge <= 0 {
+		return false
+	}
+	b.mu.Lock()
+	defer b.mu.Unlock()
+	last, ok := b.lastPushAt[nodeID]
+	age := now.Sub(last)
+	return ok && !last.IsZero() && age >= 0 && age <= maxAge
 }
 
 // SeenNodes 返回有过 push 记录的 nodeID 列表（即使当前 pending 为空也会包含）。

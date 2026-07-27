@@ -40,7 +40,7 @@ func TestSyncUsage_PushPath(t *testing.T) {
 
 	buf := nodes.NewUsageBuffer()
 	_ = buf.Append("n1", 1, nodes.UsageStats{
-		Available: true, Running: true,
+		Available: true, Running: true, UploadTotal: 170, DownloadTotal: 230,
 		Users: []nodes.UserUsage{
 			{User: "alice", UploadTotal: 70, DownloadTotal: 30},
 		},
@@ -56,6 +56,10 @@ func TestSyncUsage_PushPath(t *testing.T) {
 	alice, _ := userStore.GetUser("u1")
 	if alice.UsedBytes != 100 {
 		t.Errorf("alice.UsedBytes=%d, want 100", alice.UsedBytes)
+	}
+	node, _ := nodeStore.Get("n1")
+	if node.UploadBytes != 170 || node.DownloadBytes != 230 {
+		t.Errorf("node traffic=%d/%d, want inbound totals 170/230", node.UploadBytes, node.DownloadBytes)
 	}
 	if usageCalls != 0 {
 		t.Errorf("expected no on-demand usage call (push path), got %d", usageCalls)

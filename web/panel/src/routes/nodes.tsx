@@ -2105,8 +2105,8 @@ function NodeCard({ node, runtime, metrics, onEdit, onDelete, onOpenDetail, onRe
       </CardHeader>
 
       <CardContent className="flex-1 pt-0">
-        {/* ── 累计流量（实际带宽，不含倍率）── */}
-        <div className="flex items-center gap-3 py-2 text-xs font-mono" title="实际带宽用量，不含流量倍率">
+        {/* ── 累计流量（系统网卡流量，不含倍率）── */}
+        <div className="flex items-center gap-3 py-2 text-xs font-mono" title="系统网卡实际流量，不含计费倍率">
           <span className="flex items-center gap-1 text-[hsl(var(--muted-foreground))]">
             <IconUpload className="h-3 w-3" />
             {formatBytes(node.upload_bytes)}

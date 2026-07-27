@@ -4,7 +4,41 @@ import (
 	"fmt"
 	"sort"
 	"testing"
+
+	"github.com/0xUnixIO/Xray-core/app/stats/command"
+
+	"pulse/internal/coremanager"
 )
+
+func TestApplyTrafficStatsUsesInboundTotals(t *testing.T) {
+	result := coremanager.UsageStats{}
+	applyTrafficStats(&result, []*command.Stat{
+		{Name: "user>>>alice@vless-in>>>traffic>>>uplink", Value: 70},
+		{Name: "user>>>alice@vless-in>>>traffic>>>downlink", Value: 30},
+		{Name: "inbound>>>vless-in>>>traffic>>>uplink", Value: 170},
+		{Name: "inbound>>>vless-in>>>traffic>>>downlink", Value: 230},
+		{Name: "outbound>>>direct>>>traffic>>>uplink", Value: 999},
+	})
+
+	if result.UploadTotal != 170 || result.DownloadTotal != 230 {
+		t.Fatalf("node traffic=%d/%d, want 170/230", result.UploadTotal, result.DownloadTotal)
+	}
+	if len(result.Users) != 1 || result.Users[0].UploadTotal != 70 || result.Users[0].DownloadTotal != 30 {
+		t.Fatalf("user traffic=%+v, want alice 70/30", result.Users)
+	}
+}
+
+func TestApplyTrafficStatsFallsBackToUserTotals(t *testing.T) {
+	result := coremanager.UsageStats{}
+	applyTrafficStats(&result, []*command.Stat{
+		{Name: "user>>>alice@vless-in>>>traffic>>>uplink", Value: 70},
+		{Name: "user>>>alice@vless-in>>>traffic>>>downlink", Value: 30},
+	})
+
+	if result.UploadTotal != 70 || result.DownloadTotal != 30 {
+		t.Fatalf("node traffic=%d/%d, want fallback 70/30", result.UploadTotal, result.DownloadTotal)
+	}
+}
 
 func TestParseSessionLog_AccessLog_IPv4(t *testing.T) {
 	m := NewManager("")

@@ -127,9 +127,8 @@ func SyncUsage(ctx context.Context, store users.Store, nodeStore nodes.Store, ib
 }
 
 // SyncUsageWith 与 SyncUsage 相同，但额外接受 *nodes.UsageBuffer：
-// 优先按节点 Drain 消费 push delta；仅从未 push 成功的节点才回退到
-// c.Usage(ctx, true)。已进入 push 模式的节点即使当前 buffer 暂时为空也不能拉取，
-// 否则拉取 reset 与在途 push 竞态时会把同一份 xray 计数重复入账。
+// 优先按节点 Drain 消费 push delta。节点连续静默一段时间后回退到
+// c.Usage(ctx, true)，避免一次旧 push 把节点永久卡在没有流量入库的状态。
 //
 // 记账与 dial 解耦：push 路径只要 buffer 有数据即可写库，不因 dial 失败丢弃
 // 已 push 的流量。禁用节点不参与本轮，其 buffer 帧保留到重新启用后再 Drain。
@@ -148,6 +147,7 @@ func SyncUsageWith(ctx context.Context, store users.Store, nodeStore nodes.Store
 
 	result := SyncUsageResult{Errors: make([]string, 0)}
 	now := time.Now().UTC()
+	const pushSilenceFallbackAfter = 3 * time.Minute
 
 	// ── 阶段 1：并发获取各节点流量（网络 IO，不持锁） ────────────────────────
 	type nodeFetch struct {
@@ -176,7 +176,7 @@ func SyncUsageWith(ctx context.Context, store users.Store, nodeStore nodes.Store
 					}
 					return
 				}
-				if usageBuf.HasSeen(n.ID) {
+				if usageBuf.HasRecentPush(n.ID, now, pushSilenceFallbackAfter) {
 					fetched[idx] = nodeFetch{node: n, pushIdle: true}
 					return
 				}
@@ -328,11 +328,9 @@ func SyncUsageWith(ctx context.Context, store users.Store, nodeStore nodes.Store
 			hasTraffic  bool
 		}
 		deltaByUser := make(map[string]*userDelta)
-		var nodeUploadDelta, nodeDownloadDelta int64
+		nodeUploadDelta := fr.usage.UploadTotal
+		nodeDownloadDelta := fr.usage.DownloadTotal
 		for _, item := range fr.usage.Users {
-			nodeUploadDelta += item.UploadTotal
-			nodeDownloadDelta += item.DownloadTotal
-
 			realUser, ibTag := parseCompositeUser(item.User)
 			rate := 1.0
 			if ibTag != "" {
@@ -340,7 +338,6 @@ func SyncUsageWith(ctx context.Context, store users.Store, nodeStore nodes.Store
 					rate = r
 				}
 			}
-
 			d, ok := deltaByUser[realUser]
 			if !ok {
 				d = &userDelta{sourceIPs: make(map[string]struct{})}
@@ -357,6 +354,12 @@ func SyncUsageWith(ctx context.Context, store users.Store, nodeStore nodes.Store
 			}
 			if item.UploadTotal > 0 || item.DownloadTotal > 0 {
 				d.hasTraffic = true
+			}
+		}
+		if nodeUploadDelta == 0 && nodeDownloadDelta == 0 {
+			for _, item := range fr.usage.Users {
+				nodeUploadDelta += item.UploadTotal
+				nodeDownloadDelta += item.DownloadTotal
 			}
 		}
 
