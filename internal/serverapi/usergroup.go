@@ -53,12 +53,16 @@ func (a *userGroupAPI) handleUserGroups(w http.ResponseWriter, r *http.Request) 
 		}
 		type groupWithCount struct {
 			usergroup.UserGroup
-			MemberCount int `json:"member_count"`
+			MemberCount int      `json:"member_count"`
+			MemberIDs   []string `json:"member_ids"`
 		}
 		result := make([]groupWithCount, len(groups))
 		for i, g := range groups {
 			members, _ := a.ugStore.ListGroupMembers(g.ID)
-			result[i] = groupWithCount{UserGroup: g, MemberCount: len(members)}
+			if members == nil {
+				members = []string{}
+			}
+			result[i] = groupWithCount{UserGroup: g, MemberCount: len(members), MemberIDs: members}
 		}
 		writeJSON(w, http.StatusOK, map[string]any{"user_groups": result})
 

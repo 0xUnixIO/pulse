@@ -209,6 +209,7 @@ export default function UsersPage() {
   const [statusFilter, setStatusFilter] = useState("all");
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState("");
+  const [userGroupNames, setUserGroupNames] = useState<Record<string, string[]>>({});
 
   // ── Dialog state ─────────────────────────────────────────────
   const [createOpen, setCreateOpen] = useState(false);
@@ -329,9 +330,28 @@ export default function UsersPage() {
     }
   }, [debouncedSearch, statusFilter, handleAuthError]);
 
+  const fetchUserGroupNames = useCallback(async () => {
+    try {
+      const data = await api.get<UserGroupsResponse>("/user-groups");
+      const namesByUser: Record<string, string[]> = {};
+      for (const group of data.user_groups ?? []) {
+        for (const userId of group.member_ids ?? []) {
+          (namesByUser[userId] ??= []).push(group.name);
+        }
+      }
+      setUserGroupNames(namesByUser);
+    } catch (err) {
+      handleAuthError(err);
+    }
+  }, [handleAuthError]);
+
   useEffect(() => {
     fetchUsers();
   }, [fetchUsers]);
+
+  useEffect(() => {
+    fetchUserGroupNames();
+  }, [fetchUserGroupNames]);
 
   // ── Fetch all inbounds (for dialog checkboxes) ──────────────
   const fetchAllInbounds = useCallback(async () => {
@@ -739,6 +759,7 @@ export default function UsersPage() {
             <TableRow>
               <TableHead className="px-4">用户名</TableHead>
               <TableHead className="px-4">状态</TableHead>
+              <TableHead className="px-4">用户组</TableHead>
               <TableHead className="px-4">流量</TableHead>
               <TableHead className="hidden px-4 sm:table-cell">重置</TableHead>
               <TableHead className="hidden px-4 md:table-cell">到期</TableHead>
@@ -813,6 +834,14 @@ export default function UsersPage() {
                         )}
                       </div>
                     </div>
+                  </TableCell>
+                  <TableCell
+                    className="max-w-48 px-4 text-sm text-[hsl(var(--muted-foreground))]"
+                    title={(userGroupNames[user.id] ?? []).join("、")}
+                  >
+                    <span className="block truncate">
+                      {userGroupNames[user.id]?.join("、") || "—"}
+                    </span>
                   </TableCell>
                   <TableCell className="px-4 text-sm text-[hsl(var(--muted-foreground))] whitespace-nowrap">
                     {renderTraffic(user)}
@@ -1508,7 +1537,10 @@ export default function UsersPage() {
           if (!v) setUserGroupsDialogUser(null);
         }}
         user={userGroupsDialogUser}
-        onSuccess={fetchUsers}
+        onSuccess={() => {
+          fetchUsers();
+          fetchUserGroupNames();
+        }}
         handleAuthError={handleAuthError}
       />
 

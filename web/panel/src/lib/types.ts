@@ -473,6 +473,7 @@ export interface UserGroup {
   remark: string;
   inbound_ids: string; // 逗号分隔
   member_count?: number;
+  member_ids?: string[];
 }
 
 export interface UserGroupsResponse { user_groups: UserGroup[] }
