@@ -55,14 +55,11 @@ func (b *UsageBuffer) Append(nodeID string, seq uint64, delta UsageStats) error 
 	}
 	b.mu.Lock()
 	defer b.mu.Unlock()
-	// 重复帧不能再次入账，但仍证明节点的主动上报链路可用。
-	if seq != 0 {
-		b.lastPushAt[nodeID] = time.Now()
-	}
 	if last, ok := b.lastSeq[nodeID]; ok && seq != 0 && seq <= last {
 		if last-seq >= seqEpochGap {
 			// 节点重启：seq 从低位重新计数，开启新纪元。
 			b.lastSeq[nodeID] = seq
+			b.lastPushAt[nodeID] = time.Now()
 			b.pending[nodeID] = append(b.pending[nodeID], usageEntry{Seq: seq, Delta: delta})
 			return nil
 		}
@@ -72,6 +69,7 @@ func (b *UsageBuffer) Append(nodeID string, seq uint64, delta UsageStats) error 
 	b.pending[nodeID] = append(b.pending[nodeID], usageEntry{Seq: seq, Delta: delta})
 	if seq > b.lastSeq[nodeID] {
 		b.lastSeq[nodeID] = seq
+		b.lastPushAt[nodeID] = time.Now()
 	}
 	return nil
 }

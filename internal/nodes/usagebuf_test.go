@@ -59,6 +59,32 @@ func TestUsageBuffer_HasRecentPush(t *testing.T) {
 	}
 }
 
+func TestUsageBuffer_DuplicateDoesNotRefreshRecentPush(t *testing.T) {
+	b := NewUsageBuffer()
+	_ = b.Append("n1", 7, UsageStats{})
+
+	b.mu.Lock()
+	first := b.lastPushAt["n1"]
+	b.mu.Unlock()
+	time.Sleep(time.Millisecond)
+
+	_ = b.Append("n1", 7, UsageStats{})
+	b.mu.Lock()
+	afterDuplicate := b.lastPushAt["n1"]
+	b.mu.Unlock()
+	if !afterDuplicate.Equal(first) {
+		t.Fatalf("duplicate seq refreshed lastPushAt: first=%v after=%v", first, afterDuplicate)
+	}
+
+	_ = b.Append("n1", 8, UsageStats{})
+	b.mu.Lock()
+	afterNew := b.lastPushAt["n1"]
+	b.mu.Unlock()
+	if !afterNew.After(first) {
+		t.Fatalf("new seq did not refresh lastPushAt: first=%v after=%v", first, afterNew)
+	}
+}
+
 func TestUsageBuffer_DrainAll(t *testing.T) {
 	b := NewUsageBuffer()
 	_ = b.Append("a", 1, UsageStats{UploadTotal: 1})

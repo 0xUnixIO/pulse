@@ -211,6 +211,35 @@ func TestUsagePusher_AckTimeoutKeepsPending(t *testing.T) {
 	}
 }
 
+func TestUsagePusher_RetryWaitsForAck(t *testing.T) {
+	t.Parallel()
+	api := &mockUsageAPI{}
+	sender := newMockSender()
+	p := NewUsagePusher(api, time.Hour)
+	p.SetAckTimeout(20 * time.Millisecond)
+	p.SetSender(sender)
+
+	ctx := context.Background()
+	p.tick(ctx) // prime
+	p.tick(ctx) // push seq=1
+	time.Sleep(50 * time.Millisecond)
+	if p.PendingCount() != 1 {
+		t.Fatalf("pending should survive the first ack timeout, got %d", p.PendingCount())
+	}
+
+	p.SetAckTimeout(time.Second)
+	p.tick(ctx) // re-push seq=1 and install a fresh ack waiter
+	sender.ack(1)
+
+	deadline := time.Now().Add(time.Second)
+	for p.PendingCount() != 0 && time.Now().Before(deadline) {
+		time.Sleep(time.Millisecond)
+	}
+	if p.PendingCount() != 0 {
+		t.Fatal("retry ack should remove the pending frame")
+	}
+}
+
 // TestUsagePusher_NoNewSeqUntilAck 验证 ack 前持续 tick 不会累积多个 pending seq。
 func TestUsagePusher_NoNewSeqUntilAck(t *testing.T) {
 	t.Parallel()

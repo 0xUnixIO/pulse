@@ -131,6 +131,7 @@ func (p *UsagePusher) tick(ctx context.Context) {
 				p.logger.Warn("nodeagent: re-push usage failed", "seq", pu.seq, "err", err)
 				return
 			}
+			p.waitAck(ctx, sender, pu.seq)
 		}
 		return
 	}
@@ -152,7 +153,12 @@ func (p *UsagePusher) tick(ctx context.Context) {
 		return
 	}
 
-	// 异步等待 ack：成功后删除 pending；超时则保留给下轮重发。
+	p.waitAck(ctx, sender, seq)
+}
+
+// waitAck 异步等待 ack：成功后删除 pending；超时则保留给下轮重发。
+// 重发也必须重新等待，否则一次超时或断线会让同一帧永久卡在 pending。
+func (p *UsagePusher) waitAck(ctx context.Context, sender Sender, seq uint64) {
 	go func(s Sender, seq uint64) {
 		waitCtx, cancel := context.WithTimeout(ctx, p.ackWait)
 		defer cancel()
