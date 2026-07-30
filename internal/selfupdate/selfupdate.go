@@ -18,6 +18,7 @@ import (
 	"runtime"
 	"strings"
 	"sync"
+	"syscall"
 	"time"
 )
 
@@ -178,14 +179,26 @@ func restartService(component string) error {
 		}
 		return nil
 	}
-	if _, err := exec.LookPath("rc-service"); err == nil {
-		out, err := exec.CommandContext(ctx, "rc-service", svc, "restart").CombinedOutput()
-		if err != nil {
-			return fmt.Errorf("rc-service %s restart 失败: %w\n%s", svc, err, strings.TrimSpace(string(out)))
-		}
-		return nil
+	if rcService, err := exec.LookPath("rc-service"); err == nil {
+		return restartOpenRC(rcService, svc)
 	}
 	return fmt.Errorf("未找到 systemctl 或 rc-service，请手动重启 %s", svc)
+}
+
+// restartOpenRC 必须脱离当前服务进程执行。同步等待 rc-service restart 会让
+// OpenRC 等待当前 pulse 进程退出，而当前进程又在等待 rc-service 返回，导致
+// 自更新后服务停在离线状态。新 session 确保 OpenRC 停止主进程时不会连带终止
+// 负责完成 restart 的子进程。
+func restartOpenRC(rcService, svc string) error {
+	cmd := exec.Command(rcService, svc, "restart")
+	cmd.SysProcAttr = &syscall.SysProcAttr{Setsid: true}
+	if err := cmd.Start(); err != nil {
+		return fmt.Errorf("启动 rc-service %s restart 失败: %w", svc, err)
+	}
+	if err := cmd.Process.Release(); err != nil {
+		return fmt.Errorf("释放 rc-service %s restart 进程失败: %w", svc, err)
+	}
+	return nil
 }
 
 func fetchLatestRelease(ctx context.Context) (*Release, error) {
