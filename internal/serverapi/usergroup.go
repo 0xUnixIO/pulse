@@ -341,9 +341,15 @@ func (a *userGroupAPI) syncGroupForUser(groupID, userID string, inboundIDs []str
 	// 先获取现有 user_inbounds，用于复用凭据（保证切换来源时密码不变）
 	existing, _ := a.userStore.ListUserInboundsByUser(userID)
 	credsByInbound := make(map[string]users.UserInbound, len(existing))
+	// 该用户在本组的旧记录 ID（按 inboundID 索引）。重建时复用旧 ID，
+	// 保证以 "nodeib:<ibID>:<uibID>" 形式引用此记录的 inbound 出口不失效。
+	oldIDByInbound := make(map[string]string, len(existing))
 	for _, acc := range existing {
 		if _, ok := credsByInbound[acc.InboundID]; !ok {
 			credsByInbound[acc.InboundID] = acc // 优先保留先找到的（直接分配排在前）
+		}
+		if acc.GroupID == groupID {
+			oldIDByInbound[acc.InboundID] = acc.ID
 		}
 	}
 
@@ -364,7 +370,7 @@ func (a *userGroupAPI) syncGroupForUser(groupID, userID string, inboundIDs []str
 			secret = prev.Secret
 		}
 		acc := users.UserInbound{
-			ID:        idgen.NextString(),
+			ID:        oldIDByInbound[ibID], // 复用旧 ID，nodeib 出口引用保持稳定
 			UserID:    userID,
 			InboundID: ibID,
 			NodeID:    ib.NodeID,
@@ -372,6 +378,9 @@ func (a *userGroupAPI) syncGroupForUser(groupID, userID string, inboundIDs []str
 			Secret:    secret,
 			GroupID:   groupID,
 			CreatedAt: time.Now().UTC(),
+		}
+		if acc.ID == "" {
+			acc.ID = idgen.NextString()
 		}
 		if _, err := a.userStore.UpsertGroupUserInbound(acc); err != nil {
 			return nil, err

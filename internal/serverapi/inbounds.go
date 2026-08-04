@@ -116,33 +116,86 @@ func (a *inboundAPI) handleInboundRoutes(w http.ResponseWriter, r *http.Request)
 		}
 		writeJSON(w, http.StatusOK, item)
 	case http.MethodPut:
-		var req inbounds.Inbound
-		if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+		// 以 map 形式解码，区分「字段被省略」与「显式传空清空」：
+		// 省略的字段保留现有值（部分更新），显式传空字符串则清空。
+		var body map[string]json.RawMessage
+		if err := json.NewDecoder(r.Body).Decode(&body); err != nil {
 			writeJSON(w, http.StatusBadRequest, map[string]any{"error": "invalid json body"})
 			return
 		}
-		req.ID = id
+		req := inbounds.Inbound{ID: id}
+		for key, dest := range map[string]*string{
+			"node_id":                &req.NodeID,
+			"protocol":               &req.Protocol,
+			"tag":                    &req.Tag,
+			"method":                 &req.Method,
+			"password":               &req.Password,
+			"security":               &req.Security,
+			"reality_private_key":    &req.RealityPrivateKey,
+			"reality_public_key":     &req.RealityPublicKey,
+			"reality_handshake_addr": &req.RealityHandshakeAddr,
+			"reality_short_id":       &req.RealityShortID,
+			"outbound_id":            &req.OutboundID,
+			"extra":                  &req.Extra,
+		} {
+			if raw, ok := body[key]; ok {
+				_ = json.Unmarshal(raw, dest)
+			}
+		}
+		if raw, ok := body["port"]; ok {
+			_ = json.Unmarshal(raw, &req.Port)
+		}
+		if raw, ok := body["traffic_rate"]; ok {
+			_ = json.Unmarshal(raw, &req.TrafficRate)
+		}
 		if req.Protocol != "" && !supportedProtocol(req.Protocol) {
 			writeJSON(w, http.StatusBadRequest, map[string]any{"error": "unsupported protocol"})
 			return
 		}
-		// 合并现有字段
+		// 合并现有字段（请求体未出现的字段保留原值）
 		existing, err := a.store.GetInbound(id)
 		if err != nil {
 			writeInboundError(w, err)
 			return
 		}
-		if req.NodeID == "" {
-			req.NodeID = existing.NodeID
+		reqFields := map[string]*string{
+			"node_id":                &req.NodeID,
+			"protocol":               &req.Protocol,
+			"tag":                    &req.Tag,
+			"method":                 &req.Method,
+			"password":               &req.Password,
+			"security":               &req.Security,
+			"reality_private_key":    &req.RealityPrivateKey,
+			"reality_public_key":     &req.RealityPublicKey,
+			"reality_handshake_addr": &req.RealityHandshakeAddr,
+			"reality_short_id":       &req.RealityShortID,
+			"outbound_id":            &req.OutboundID,
+			"extra":                  &req.Extra,
 		}
-		if req.Protocol == "" {
-			req.Protocol = existing.Protocol
+		existingValues := map[string]string{
+			"node_id":                existing.NodeID,
+			"protocol":               existing.Protocol,
+			"tag":                    existing.Tag,
+			"method":                 existing.Method,
+			"password":               existing.Password,
+			"security":               existing.Security,
+			"reality_private_key":    existing.RealityPrivateKey,
+			"reality_public_key":     existing.RealityPublicKey,
+			"reality_handshake_addr": existing.RealityHandshakeAddr,
+			"reality_short_id":       existing.RealityShortID,
+			"outbound_id":            existing.OutboundID,
+			"extra":                  existing.Extra,
 		}
-		if req.Tag == "" {
-			req.Tag = existing.Tag
+		for key, dest := range reqFields {
+			if _, ok := body[key]; !ok {
+				*dest = existingValues[key]
+			}
 		}
-		if req.Port == 0 {
+		if _, ok := body["port"]; !ok {
 			req.Port = existing.Port
+		}
+		if _, ok := body["traffic_rate"]; !ok || req.TrafficRate <= 0 {
+			req.TrafficRate = existing.TrafficRate
 		}
 		trimInbound(&req)
 		nodeChanged := req.NodeID != existing.NodeID
