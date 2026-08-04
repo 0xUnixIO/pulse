@@ -310,7 +310,7 @@ func (s *MemoryStore) ListSubAccessLogs(userID string, limit int) ([]SubAccessLo
 	return nil, nil
 }
 
-func (s *MemoryStore) AddUserNodeTraffic(userID, nodeID, date string, upload, download int64) error {
+func (s *MemoryStore) AddUserNodeTraffic(userID, nodeID, date string, upload, download, rawUpload, rawDownload int64) error {
 	return nil
 }
 

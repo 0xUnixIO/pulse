@@ -39,7 +39,10 @@ export interface TodayUserStat {
   username: string;
   upload_bytes: number;
   download_bytes: number;
+  raw_upload_bytes: number;
+  raw_download_bytes: number;
   total_bytes: number;
+  raw_total_bytes: number;
 }
 
 export interface TodayNodeStat {
@@ -47,7 +50,10 @@ export interface TodayNodeStat {
   node_name: string;
   upload_bytes: number;
   download_bytes: number;
+  raw_upload_bytes: number;
+  raw_download_bytes: number;
   total_bytes: number;
+  raw_total_bytes: number;
 }
 
 export interface TopUserStat {

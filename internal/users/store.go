@@ -136,7 +136,8 @@ type Store interface {
 	ListSubAccessLogs(userID string, limit int) ([]SubAccessLog, error)
 
 	// 用户节点流量统计
-	AddUserNodeTraffic(userID, nodeID, date string, upload, download int64) error
+	// upload/download 为计费流量（含节点倍率），rawUpload/rawDownload 为实际流量（不含倍率）。
+	AddUserNodeTraffic(userID, nodeID, date string, upload, download, rawUpload, rawDownload int64) error
 	ListUserNodeUsage(userID string) ([]UserNodeUsage, error)
 	ClearUserNodeDailyUsage(userID string) error
 
@@ -164,33 +165,43 @@ type Store interface {
 
 // UserNodeUsage 某用户在某节点的累计流量（所有日期汇总）。
 type UserNodeUsage struct {
-	NodeID        string
-	UploadBytes   int64
-	DownloadBytes int64
+	NodeID            string
+	UploadBytes       int64 // 计费流量（含节点倍率）
+	DownloadBytes     int64
+	RawUploadBytes    int64 // 实际流量（不含倍率）
+	RawDownloadBytes  int64
 }
 
 // UserDailyUsage 某用户某天的合并流量（跨节点求和）。
 type UserDailyUsage struct {
-	Date          string `json:"date"` // YYYY-MM-DD
-	UploadBytes   int64  `json:"upload_bytes"`
-	DownloadBytes int64  `json:"download_bytes"`
+	Date             string `json:"date"` // YYYY-MM-DD
+	UploadBytes      int64  `json:"upload_bytes"`
+	DownloadBytes    int64  `json:"download_bytes"`
+	RawUploadBytes   int64  `json:"raw_upload_bytes"`
+	RawDownloadBytes int64  `json:"raw_download_bytes"`
 }
 
 // TodayUserStat 今日某用户的流量统计（跨节点合并）。
 type TodayUserStat struct {
-	Username      string `json:"username"`
-	UploadBytes   int64  `json:"upload_bytes"`
-	DownloadBytes int64  `json:"download_bytes"`
-	TotalBytes    int64  `json:"total_bytes"`
+	Username         string `json:"username"`
+	UploadBytes      int64  `json:"upload_bytes"`
+	DownloadBytes    int64  `json:"download_bytes"`
+	RawUploadBytes   int64  `json:"raw_upload_bytes"`
+	RawDownloadBytes int64  `json:"raw_download_bytes"`
+	TotalBytes       int64  `json:"total_bytes"`
+	RawTotalBytes    int64  `json:"raw_total_bytes"`
 }
 
 // TodayNodeStat 今日某用户在某节点的流量统计。
 type TodayNodeStat struct {
-	NodeID        string `json:"node_id"`
-	NodeName      string `json:"node_name"`
-	UploadBytes   int64  `json:"upload_bytes"`
-	DownloadBytes int64  `json:"download_bytes"`
-	TotalBytes    int64  `json:"total_bytes"`
+	NodeID           string `json:"node_id"`
+	NodeName         string `json:"node_name"`
+	UploadBytes      int64  `json:"upload_bytes"`
+	DownloadBytes    int64  `json:"download_bytes"`
+	RawUploadBytes   int64  `json:"raw_upload_bytes"`
+	RawDownloadBytes int64  `json:"raw_download_bytes"`
+	TotalBytes       int64  `json:"total_bytes"`
+	RawTotalBytes    int64  `json:"raw_total_bytes"`
 }
 
 // EffectiveStatusAt 使用给定时间计算用户的实际运行时状态（不写库，仅计算）。

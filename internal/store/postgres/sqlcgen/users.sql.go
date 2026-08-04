@@ -465,8 +465,10 @@ func (q *Queries) ListSubAccessLogs(ctx context.Context, arg ListSubAccessLogsPa
 
 const listTodayNodeUserStats = `-- name: ListTodayNodeUserStats :many
 SELECT u.username,
-       SUM(d.upload_bytes)::bigint   AS upload_bytes,
-       SUM(d.download_bytes)::bigint AS download_bytes
+       SUM(d.upload_bytes)::bigint       AS upload_bytes,
+       SUM(d.download_bytes)::bigint     AS download_bytes,
+       SUM(d.raw_upload_bytes)::bigint   AS raw_upload_bytes,
+       SUM(d.raw_download_bytes)::bigint AS raw_download_bytes
 FROM user_node_daily_usage d
 JOIN users u ON u.id = d.user_id
 WHERE d.date = $1
@@ -484,9 +486,11 @@ type ListTodayNodeUserStatsParams struct {
 }
 
 type ListTodayNodeUserStatsRow struct {
-	Username      string
-	UploadBytes   int64
-	DownloadBytes int64
+	Username         string
+	UploadBytes      int64
+	DownloadBytes    int64
+	RawUploadBytes   int64
+	RawDownloadBytes int64
 }
 
 func (q *Queries) ListTodayNodeUserStats(ctx context.Context, arg ListTodayNodeUserStatsParams) ([]ListTodayNodeUserStatsRow, error) {
@@ -498,7 +502,13 @@ func (q *Queries) ListTodayNodeUserStats(ctx context.Context, arg ListTodayNodeU
 	items := []ListTodayNodeUserStatsRow{}
 	for rows.Next() {
 		var i ListTodayNodeUserStatsRow
-		if err := rows.Scan(&i.Username, &i.UploadBytes, &i.DownloadBytes); err != nil {
+		if err := rows.Scan(
+			&i.Username,
+			&i.UploadBytes,
+			&i.DownloadBytes,
+			&i.RawUploadBytes,
+			&i.RawDownloadBytes,
+		); err != nil {
 			return nil, err
 		}
 		items = append(items, i)
@@ -512,8 +522,10 @@ func (q *Queries) ListTodayNodeUserStats(ctx context.Context, arg ListTodayNodeU
 const listTodayUserNodeStats = `-- name: ListTodayUserNodeStats :many
 SELECT n.id   AS node_id,
        n.name AS node_name,
-       SUM(d.upload_bytes)::bigint   AS upload_bytes,
-       SUM(d.download_bytes)::bigint AS download_bytes
+       SUM(d.upload_bytes)::bigint       AS upload_bytes,
+       SUM(d.download_bytes)::bigint     AS download_bytes,
+       SUM(d.raw_upload_bytes)::bigint   AS raw_upload_bytes,
+       SUM(d.raw_download_bytes)::bigint AS raw_download_bytes
 FROM user_node_daily_usage d
 JOIN users u ON u.id = d.user_id
 JOIN nodes n ON n.id = d.node_id
@@ -530,10 +542,12 @@ type ListTodayUserNodeStatsParams struct {
 }
 
 type ListTodayUserNodeStatsRow struct {
-	NodeID        string
-	NodeName      string
-	UploadBytes   int64
-	DownloadBytes int64
+	NodeID           string
+	NodeName         string
+	UploadBytes      int64
+	DownloadBytes    int64
+	RawUploadBytes   int64
+	RawDownloadBytes int64
 }
 
 func (q *Queries) ListTodayUserNodeStats(ctx context.Context, arg ListTodayUserNodeStatsParams) ([]ListTodayUserNodeStatsRow, error) {
@@ -550,6 +564,8 @@ func (q *Queries) ListTodayUserNodeStats(ctx context.Context, arg ListTodayUserN
 			&i.NodeName,
 			&i.UploadBytes,
 			&i.DownloadBytes,
+			&i.RawUploadBytes,
+			&i.RawDownloadBytes,
 		); err != nil {
 			return nil, err
 		}
@@ -563,8 +579,10 @@ func (q *Queries) ListTodayUserNodeStats(ctx context.Context, arg ListTodayUserN
 
 const listTodayUserStats = `-- name: ListTodayUserStats :many
 SELECT u.username,
-       SUM(d.upload_bytes)::bigint   AS upload_bytes,
-       SUM(d.download_bytes)::bigint AS download_bytes
+       SUM(d.upload_bytes)::bigint       AS upload_bytes,
+       SUM(d.download_bytes)::bigint     AS download_bytes,
+       SUM(d.raw_upload_bytes)::bigint   AS raw_upload_bytes,
+       SUM(d.raw_download_bytes)::bigint AS raw_download_bytes
 FROM user_node_daily_usage d
 JOIN users u ON u.id = d.user_id
 WHERE d.date = $1
@@ -580,9 +598,11 @@ type ListTodayUserStatsParams struct {
 }
 
 type ListTodayUserStatsRow struct {
-	Username      string
-	UploadBytes   int64
-	DownloadBytes int64
+	Username         string
+	UploadBytes      int64
+	DownloadBytes    int64
+	RawUploadBytes   int64
+	RawDownloadBytes int64
 }
 
 func (q *Queries) ListTodayUserStats(ctx context.Context, arg ListTodayUserStatsParams) ([]ListTodayUserStatsRow, error) {
@@ -594,7 +614,13 @@ func (q *Queries) ListTodayUserStats(ctx context.Context, arg ListTodayUserStats
 	items := []ListTodayUserStatsRow{}
 	for rows.Next() {
 		var i ListTodayUserStatsRow
-		if err := rows.Scan(&i.Username, &i.UploadBytes, &i.DownloadBytes); err != nil {
+		if err := rows.Scan(
+			&i.Username,
+			&i.UploadBytes,
+			&i.DownloadBytes,
+			&i.RawUploadBytes,
+			&i.RawDownloadBytes,
+		); err != nil {
 			return nil, err
 		}
 		items = append(items, i)
@@ -606,7 +632,11 @@ func (q *Queries) ListTodayUserStats(ctx context.Context, arg ListTodayUserStats
 }
 
 const listUserDailyUsage = `-- name: ListUserDailyUsage :many
-SELECT date, SUM(upload_bytes)::bigint AS upload_bytes, SUM(download_bytes)::bigint AS download_bytes
+SELECT date,
+       SUM(upload_bytes)::bigint       AS upload_bytes,
+       SUM(download_bytes)::bigint     AS download_bytes,
+       SUM(raw_upload_bytes)::bigint   AS raw_upload_bytes,
+       SUM(raw_download_bytes)::bigint AS raw_download_bytes
 FROM user_node_daily_usage
 WHERE user_id = $1 AND date >= $2
 GROUP BY date
@@ -619,9 +649,11 @@ type ListUserDailyUsageParams struct {
 }
 
 type ListUserDailyUsageRow struct {
-	Date          string
-	UploadBytes   int64
-	DownloadBytes int64
+	Date             string
+	UploadBytes      int64
+	DownloadBytes    int64
+	RawUploadBytes   int64
+	RawDownloadBytes int64
 }
 
 func (q *Queries) ListUserDailyUsage(ctx context.Context, arg ListUserDailyUsageParams) ([]ListUserDailyUsageRow, error) {
@@ -633,7 +665,13 @@ func (q *Queries) ListUserDailyUsage(ctx context.Context, arg ListUserDailyUsage
 	items := []ListUserDailyUsageRow{}
 	for rows.Next() {
 		var i ListUserDailyUsageRow
-		if err := rows.Scan(&i.Date, &i.UploadBytes, &i.DownloadBytes); err != nil {
+		if err := rows.Scan(
+			&i.Date,
+			&i.UploadBytes,
+			&i.DownloadBytes,
+			&i.RawUploadBytes,
+			&i.RawDownloadBytes,
+		); err != nil {
 			return nil, err
 		}
 		items = append(items, i)
@@ -748,8 +786,10 @@ func (q *Queries) ListUserInboundsByUser(ctx context.Context, userID string) ([]
 
 const listUserNodeUsage = `-- name: ListUserNodeUsage :many
 SELECT node_id,
-       SUM(upload_bytes)::bigint   AS upload_bytes,
-       SUM(download_bytes)::bigint AS download_bytes
+       SUM(upload_bytes)::bigint       AS upload_bytes,
+       SUM(download_bytes)::bigint     AS download_bytes,
+       SUM(raw_upload_bytes)::bigint   AS raw_upload_bytes,
+       SUM(raw_download_bytes)::bigint AS raw_download_bytes
 FROM user_node_daily_usage
 WHERE user_id = $1
 GROUP BY node_id
@@ -757,9 +797,11 @@ ORDER BY SUM(upload_bytes) + SUM(download_bytes) DESC
 `
 
 type ListUserNodeUsageRow struct {
-	NodeID        string
-	UploadBytes   int64
-	DownloadBytes int64
+	NodeID           string
+	UploadBytes      int64
+	DownloadBytes    int64
+	RawUploadBytes   int64
+	RawDownloadBytes int64
 }
 
 func (q *Queries) ListUserNodeUsage(ctx context.Context, userID string) ([]ListUserNodeUsageRow, error) {
@@ -771,7 +813,13 @@ func (q *Queries) ListUserNodeUsage(ctx context.Context, userID string) ([]ListU
 	items := []ListUserNodeUsageRow{}
 	for rows.Next() {
 		var i ListUserNodeUsageRow
-		if err := rows.Scan(&i.NodeID, &i.UploadBytes, &i.DownloadBytes); err != nil {
+		if err := rows.Scan(
+			&i.NodeID,
+			&i.UploadBytes,
+			&i.DownloadBytes,
+			&i.RawUploadBytes,
+			&i.RawDownloadBytes,
+		); err != nil {
 			return nil, err
 		}
 		items = append(items, i)
@@ -1069,19 +1117,23 @@ func (q *Queries) UpsertUserInbound(ctx context.Context, arg UpsertUserInboundPa
 
 const upsertUserNodeTraffic = `-- name: UpsertUserNodeTraffic :exec
 
-INSERT INTO user_node_daily_usage (user_id, node_id, date, upload_bytes, download_bytes)
-VALUES ($1, $2, $3, $4, $5)
+INSERT INTO user_node_daily_usage (user_id, node_id, date, upload_bytes, download_bytes, raw_upload_bytes, raw_download_bytes)
+VALUES ($1, $2, $3, $4, $5, $6, $7)
 ON CONFLICT(user_id, node_id, date) DO UPDATE SET
-    upload_bytes   = user_node_daily_usage.upload_bytes   + excluded.upload_bytes,
-    download_bytes = user_node_daily_usage.download_bytes + excluded.download_bytes
+    upload_bytes       = user_node_daily_usage.upload_bytes       + excluded.upload_bytes,
+    download_bytes     = user_node_daily_usage.download_bytes     + excluded.download_bytes,
+    raw_upload_bytes   = user_node_daily_usage.raw_upload_bytes   + excluded.raw_upload_bytes,
+    raw_download_bytes = user_node_daily_usage.raw_download_bytes + excluded.raw_download_bytes
 `
 
 type UpsertUserNodeTrafficParams struct {
-	UserID        string
-	NodeID        string
-	Date          string
-	UploadBytes   int64
-	DownloadBytes int64
+	UserID           string
+	NodeID           string
+	Date             string
+	UploadBytes      int64
+	DownloadBytes    int64
+	RawUploadBytes   int64
+	RawDownloadBytes int64
 }
 
 // ─── user_node_daily_usage ────────────────────────────────────────────────────
@@ -1092,6 +1144,8 @@ func (q *Queries) UpsertUserNodeTraffic(ctx context.Context, arg UpsertUserNodeT
 		arg.Date,
 		arg.UploadBytes,
 		arg.DownloadBytes,
+		arg.RawUploadBytes,
+		arg.RawDownloadBytes,
 	)
 	return err
 }

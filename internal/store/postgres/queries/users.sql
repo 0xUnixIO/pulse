@@ -201,14 +201,20 @@ WHERE sal.user_id = $1
 -- ─── user_node_daily_usage ────────────────────────────────────────────────────
 
 -- name: UpsertUserNodeTraffic :exec
-INSERT INTO user_node_daily_usage (user_id, node_id, date, upload_bytes, download_bytes)
-VALUES ($1, $2, $3, $4, $5)
+INSERT INTO user_node_daily_usage (user_id, node_id, date, upload_bytes, download_bytes, raw_upload_bytes, raw_download_bytes)
+VALUES ($1, $2, $3, $4, $5, $6, $7)
 ON CONFLICT(user_id, node_id, date) DO UPDATE SET
-    upload_bytes   = user_node_daily_usage.upload_bytes   + excluded.upload_bytes,
-    download_bytes = user_node_daily_usage.download_bytes + excluded.download_bytes;
+    upload_bytes       = user_node_daily_usage.upload_bytes       + excluded.upload_bytes,
+    download_bytes     = user_node_daily_usage.download_bytes     + excluded.download_bytes,
+    raw_upload_bytes   = user_node_daily_usage.raw_upload_bytes   + excluded.raw_upload_bytes,
+    raw_download_bytes = user_node_daily_usage.raw_download_bytes + excluded.raw_download_bytes;
 
 -- name: ListUserDailyUsage :many
-SELECT date, SUM(upload_bytes)::bigint AS upload_bytes, SUM(download_bytes)::bigint AS download_bytes
+SELECT date,
+       SUM(upload_bytes)::bigint       AS upload_bytes,
+       SUM(download_bytes)::bigint     AS download_bytes,
+       SUM(raw_upload_bytes)::bigint   AS raw_upload_bytes,
+       SUM(raw_download_bytes)::bigint AS raw_download_bytes
 FROM user_node_daily_usage
 WHERE user_id = $1 AND date >= $2
 GROUP BY date
@@ -216,8 +222,10 @@ ORDER BY date;
 
 -- name: ListUserNodeUsage :many
 SELECT node_id,
-       SUM(upload_bytes)::bigint   AS upload_bytes,
-       SUM(download_bytes)::bigint AS download_bytes
+       SUM(upload_bytes)::bigint       AS upload_bytes,
+       SUM(download_bytes)::bigint     AS download_bytes,
+       SUM(raw_upload_bytes)::bigint   AS raw_upload_bytes,
+       SUM(raw_download_bytes)::bigint AS raw_download_bytes
 FROM user_node_daily_usage
 WHERE user_id = $1
 GROUP BY node_id
@@ -225,8 +233,10 @@ ORDER BY SUM(upload_bytes) + SUM(download_bytes) DESC;
 
 -- name: ListTodayUserStats :many
 SELECT u.username,
-       SUM(d.upload_bytes)::bigint   AS upload_bytes,
-       SUM(d.download_bytes)::bigint AS download_bytes
+       SUM(d.upload_bytes)::bigint       AS upload_bytes,
+       SUM(d.download_bytes)::bigint     AS download_bytes,
+       SUM(d.raw_upload_bytes)::bigint   AS raw_upload_bytes,
+       SUM(d.raw_download_bytes)::bigint AS raw_download_bytes
 FROM user_node_daily_usage d
 JOIN users u ON u.id = d.user_id
 WHERE d.date = $1
@@ -238,8 +248,10 @@ LIMIT $2;
 -- name: ListTodayUserNodeStats :many
 SELECT n.id   AS node_id,
        n.name AS node_name,
-       SUM(d.upload_bytes)::bigint   AS upload_bytes,
-       SUM(d.download_bytes)::bigint AS download_bytes
+       SUM(d.upload_bytes)::bigint       AS upload_bytes,
+       SUM(d.download_bytes)::bigint     AS download_bytes,
+       SUM(d.raw_upload_bytes)::bigint   AS raw_upload_bytes,
+       SUM(d.raw_download_bytes)::bigint AS raw_download_bytes
 FROM user_node_daily_usage d
 JOIN users u ON u.id = d.user_id
 JOIN nodes n ON n.id = d.node_id
@@ -251,8 +263,10 @@ ORDER BY SUM(d.upload_bytes) + SUM(d.download_bytes) DESC;
 
 -- name: ListTodayNodeUserStats :many
 SELECT u.username,
-       SUM(d.upload_bytes)::bigint   AS upload_bytes,
-       SUM(d.download_bytes)::bigint AS download_bytes
+       SUM(d.upload_bytes)::bigint       AS upload_bytes,
+       SUM(d.download_bytes)::bigint     AS download_bytes,
+       SUM(d.raw_upload_bytes)::bigint   AS raw_upload_bytes,
+       SUM(d.raw_download_bytes)::bigint AS raw_download_bytes
 FROM user_node_daily_usage d
 JOIN users u ON u.id = d.user_id
 WHERE d.date = $1

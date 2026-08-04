@@ -19,7 +19,7 @@ import {
   Button,
 } from "@/components/ui";
 import { ScrollArea } from "@/components/ui/scroll-area";
-import { Dialog, DialogContent, DialogHeader, DialogTitle } from "@/components/ui/dialog";
+import { Dialog, DialogContent, DialogHeader, DialogTitle, DialogDescription } from "@/components/ui/dialog";
 import { api } from "@/lib/api";
 import { useAuthErrorHandler } from "@/hooks/useAuthErrorHandler";
 import { formatBytes, formatBytesCompact } from "@/lib/format";
@@ -789,11 +789,11 @@ function DrilldownDialog({
         ? `${drilldown.username} · 今日节点分布`
         : "";
 
-  const items: { key: string; label: string; total: number }[] =
+  const items: { key: string; label: string; total: number; rawTotal: number }[] =
     drilldown?.type === "node" && nodeUsers
-      ? nodeUsers.map((u) => ({ key: u.username, label: u.username, total: u.total_bytes }))
+      ? nodeUsers.map((u) => ({ key: u.username, label: u.username, total: u.total_bytes, rawTotal: u.raw_total_bytes }))
       : drilldown?.type === "user" && userNodes
-        ? userNodes.map((n) => ({ key: n.node_id, label: n.node_name, total: n.total_bytes }))
+        ? userNodes.map((n) => ({ key: n.node_id, label: n.node_name, total: n.total_bytes, rawTotal: n.raw_total_bytes }))
         : [];
 
   const max = Math.max(...items.map((i) => i.total), 1);
@@ -804,6 +804,9 @@ function DrilldownDialog({
       <DialogContent className="max-w-md">
         <DialogHeader>
           <DialogTitle className="text-sm font-medium">{title}</DialogTitle>
+          <DialogDescription className="text-xs">
+            计费流量（实际流量 × 节点倍率），非实际带宽；占比为该维度内份额
+          </DialogDescription>
         </DialogHeader>
         {loading ? (
           <div className="flex items-center justify-center py-8">
@@ -824,7 +827,16 @@ function DrilldownDialog({
                         {item.label}
                       </span>
                       <span className="flex shrink-0 items-center gap-1.5 text-xs tabular-nums text-[hsl(var(--muted-foreground))]">
-                        <span>{formatBytes(item.total)}</span>
+                        <span>
+                          {item.rawTotal > 0 && item.rawTotal !== item.total ? (
+                            <>
+                              <span className="opacity-70">{formatBytes(item.rawTotal)} → </span>
+                              <span>{formatBytes(item.total)}</span>
+                            </>
+                          ) : (
+                            formatBytes(item.total)
+                          )}
+                        </span>
                         <span className="opacity-50">{pct.toFixed(1)}%</span>
                       </span>
                     </div>

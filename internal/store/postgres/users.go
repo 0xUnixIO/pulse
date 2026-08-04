@@ -355,13 +355,15 @@ func (s *UserStore) ListSubAccessLogs(userID string, limit int) ([]users.SubAcce
 
 // ─── 用户节点流量统计 ──────────────────────────────────────────────────────────
 
-func (s *UserStore) AddUserNodeTraffic(userID, nodeID, date string, upload, download int64) error {
+func (s *UserStore) AddUserNodeTraffic(userID, nodeID, date string, upload, download, rawUpload, rawDownload int64) error {
 	err := sqlcgen.New(s.db).UpsertUserNodeTraffic(context.Background(), sqlcgen.UpsertUserNodeTrafficParams{
-		UserID:        userID,
-		NodeID:        nodeID,
-		Date:          date,
-		UploadBytes:   upload,
-		DownloadBytes: download,
+		UserID:           userID,
+		NodeID:           nodeID,
+		Date:             date,
+		UploadBytes:      upload,
+		DownloadBytes:    download,
+		RawUploadBytes:   rawUpload,
+		RawDownloadBytes: rawDownload,
 	})
 	if err != nil {
 		return fmt.Errorf("add user node traffic: %w", err)
@@ -384,9 +386,11 @@ func (s *UserStore) ListUserDailyUsage(userID string, days int) ([]users.UserDai
 	out := make([]users.UserDailyUsage, 0, len(rows))
 	for _, r := range rows {
 		out = append(out, users.UserDailyUsage{
-			Date:          r.Date,
-			UploadBytes:   r.UploadBytes,
-			DownloadBytes: r.DownloadBytes,
+			Date:             r.Date,
+			UploadBytes:      r.UploadBytes,
+			DownloadBytes:    r.DownloadBytes,
+			RawUploadBytes:   r.RawUploadBytes,
+			RawDownloadBytes: r.RawDownloadBytes,
 		})
 	}
 	return out, nil
@@ -404,9 +408,11 @@ func (s *UserStore) ListUserNodeUsage(userID string) ([]users.UserNodeUsage, err
 	out := make([]users.UserNodeUsage, 0, len(rows))
 	for _, r := range rows {
 		out = append(out, users.UserNodeUsage{
-			NodeID:        r.NodeID,
-			UploadBytes:   r.UploadBytes,
-			DownloadBytes: r.DownloadBytes,
+			NodeID:           r.NodeID,
+			UploadBytes:      r.UploadBytes,
+			DownloadBytes:    r.DownloadBytes,
+			RawUploadBytes:   r.RawUploadBytes,
+			RawDownloadBytes: r.RawDownloadBytes,
 		})
 	}
 	return out, nil
@@ -425,10 +431,13 @@ func (s *UserStore) ListTodayUserStats(limit int) ([]users.TodayUserStat, error)
 	out := make([]users.TodayUserStat, 0, len(rows))
 	for _, r := range rows {
 		out = append(out, users.TodayUserStat{
-			Username:      r.Username,
-			UploadBytes:   r.UploadBytes,
-			DownloadBytes: r.DownloadBytes,
-			TotalBytes:    r.UploadBytes + r.DownloadBytes,
+			Username:         r.Username,
+			UploadBytes:      r.UploadBytes,
+			DownloadBytes:    r.DownloadBytes,
+			RawUploadBytes:   r.RawUploadBytes,
+			RawDownloadBytes: r.RawDownloadBytes,
+			TotalBytes:       r.UploadBytes + r.DownloadBytes,
+			RawTotalBytes:    r.RawUploadBytes + r.RawDownloadBytes,
 		})
 	}
 	return out, nil
@@ -448,10 +457,13 @@ func (s *UserStore) ListTodayNodeUserStats(nodeID string, limit int) ([]users.To
 	out := make([]users.TodayUserStat, 0, len(rows))
 	for _, r := range rows {
 		out = append(out, users.TodayUserStat{
-			Username:      r.Username,
-			UploadBytes:   r.UploadBytes,
-			DownloadBytes: r.DownloadBytes,
-			TotalBytes:    r.UploadBytes + r.DownloadBytes,
+			Username:         r.Username,
+			UploadBytes:      r.UploadBytes,
+			DownloadBytes:    r.DownloadBytes,
+			RawUploadBytes:   r.RawUploadBytes,
+			RawDownloadBytes: r.RawDownloadBytes,
+			TotalBytes:       r.UploadBytes + r.DownloadBytes,
+			RawTotalBytes:    r.RawUploadBytes + r.RawDownloadBytes,
 		})
 	}
 	return out, nil
@@ -470,11 +482,14 @@ func (s *UserStore) ListTodayUserNodeStats(username string) ([]users.TodayNodeSt
 	out := make([]users.TodayNodeStat, 0, len(rows))
 	for _, r := range rows {
 		out = append(out, users.TodayNodeStat{
-			NodeID:        r.NodeID,
-			NodeName:      r.NodeName,
-			UploadBytes:   r.UploadBytes,
-			DownloadBytes: r.DownloadBytes,
-			TotalBytes:    r.UploadBytes + r.DownloadBytes,
+			NodeID:           r.NodeID,
+			NodeName:         r.NodeName,
+			UploadBytes:      r.UploadBytes,
+			DownloadBytes:    r.DownloadBytes,
+			RawUploadBytes:   r.RawUploadBytes,
+			RawDownloadBytes: r.RawDownloadBytes,
+			TotalBytes:       r.UploadBytes + r.DownloadBytes,
+			RawTotalBytes:    r.RawUploadBytes + r.RawDownloadBytes,
 		})
 	}
 	return out, nil

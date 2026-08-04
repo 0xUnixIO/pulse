@@ -2024,6 +2024,9 @@ interface NodeUsageItem {
   upload_bytes: number;
   download_bytes: number;
   total_bytes: number;
+  raw_upload_bytes: number;
+  raw_download_bytes: number;
+  raw_total_bytes: number;
 }
 
 function NodeUsageDialog({
@@ -2077,11 +2080,11 @@ function NodeUsageDialog({
 
   return (
     <Dialog open={open} onOpenChange={onOpenChange}>
-      <DialogContent className="sm:max-w-xl">
+      <DialogContent className="sm:max-w-2xl">
         <DialogHeader>
           <DialogTitle>节点流量</DialogTitle>
           <DialogDescription>
-            该用户在各节点的流量使用详情。此处为计费流量（实际流量 × 节点倍率），非实际带宽。
+            该用户在各节点的流量使用详情。实际 = 不含倍率的真实流量；计费 = 实际 × 节点倍率。
           </DialogDescription>
         </DialogHeader>
 
@@ -2099,7 +2102,8 @@ function NodeUsageDialog({
                   <TableHead className="px-3">节点名称</TableHead>
                   <TableHead className="px-3">上传</TableHead>
                   <TableHead className="px-3">下载</TableHead>
-                  <TableHead className="px-3">总计</TableHead>
+                  <TableHead className="px-3">实际</TableHead>
+                  <TableHead className="px-3">计费</TableHead>
                   <TableHead className="px-3 w-24">占比</TableHead>
                 </TableRow>
               </TableHeader>
@@ -2108,6 +2112,9 @@ function NodeUsageDialog({
                   <TableRow key={i}>
                     <TableCell className="px-3">
                       <div className="h-4 w-24 animate-pulse rounded bg-[hsl(var(--muted))]" />
+                    </TableCell>
+                    <TableCell className="px-3">
+                      <div className="h-4 w-16 animate-pulse rounded bg-[hsl(var(--muted))]" />
                     </TableCell>
                     <TableCell className="px-3">
                       <div className="h-4 w-16 animate-pulse rounded bg-[hsl(var(--muted))]" />
@@ -2136,7 +2143,8 @@ function NodeUsageDialog({
                   <TableHead className="px-3">节点名称</TableHead>
                   <TableHead className="px-3">上传</TableHead>
                   <TableHead className="px-3">下载</TableHead>
-                  <TableHead className="px-3">总计</TableHead>
+                  <TableHead className="px-3">实际</TableHead>
+                  <TableHead className="px-3">计费</TableHead>
                   <TableHead className="px-3 w-24">占比</TableHead>
                 </TableRow>
               </TableHeader>
@@ -2151,6 +2159,11 @@ function NodeUsageDialog({
                     </TableCell>
                     <TableCell className="px-3 text-sm text-[hsl(var(--muted-foreground))]">
                       {formatBytes(item.download_bytes)}
+                    </TableCell>
+                    <TableCell className="px-3 text-sm text-[hsl(var(--muted-foreground))]">
+                      {item.raw_total_bytes > 0 && item.raw_total_bytes !== item.total_bytes
+                        ? formatBytes(item.raw_total_bytes)
+                        : "-"}
                     </TableCell>
                     <TableCell className="px-3 text-sm font-mono text-[hsl(var(--foreground))]">
                       {formatBytes(item.total_bytes)}

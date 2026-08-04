@@ -201,11 +201,13 @@ CREATE TABLE IF NOT EXISTS node_uptime_log (
 
 -- user_node_daily_usage：用户在各节点的按天流量
 CREATE TABLE IF NOT EXISTS user_node_daily_usage (
-    user_id        TEXT NOT NULL,
-    node_id        TEXT NOT NULL,
-    date           TEXT NOT NULL,
-    upload_bytes   BIGINT NOT NULL DEFAULT 0,
-    download_bytes BIGINT NOT NULL DEFAULT 0,
+    user_id            TEXT NOT NULL,
+    node_id            TEXT NOT NULL,
+    date               TEXT NOT NULL,
+    upload_bytes       BIGINT NOT NULL DEFAULT 0,
+    download_bytes     BIGINT NOT NULL DEFAULT 0,
+    raw_upload_bytes   BIGINT NOT NULL DEFAULT 0,
+    raw_download_bytes BIGINT NOT NULL DEFAULT 0,
     PRIMARY KEY (user_id, node_id, date)
 );
 

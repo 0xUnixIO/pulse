@@ -191,11 +191,13 @@ var schemaMigrations = []migration{
 				PRIMARY KEY (node_id, checked_at)
 			)`,
 			`CREATE TABLE IF NOT EXISTS user_node_daily_usage (
-				user_id        TEXT NOT NULL,
-				node_id        TEXT NOT NULL,
-				date           TEXT NOT NULL,
-				upload_bytes   BIGINT NOT NULL DEFAULT 0,
-				download_bytes BIGINT NOT NULL DEFAULT 0,
+				user_id            TEXT NOT NULL,
+				node_id            TEXT NOT NULL,
+				date               TEXT NOT NULL,
+				upload_bytes       BIGINT NOT NULL DEFAULT 0,
+				download_bytes     BIGINT NOT NULL DEFAULT 0,
+				raw_upload_bytes   BIGINT NOT NULL DEFAULT 0,
+				raw_download_bytes BIGINT NOT NULL DEFAULT 0,
 				PRIMARY KEY (user_id, node_id, date)
 			)`,
 			`CREATE TABLE IF NOT EXISTS route_rules (
@@ -406,6 +408,14 @@ var schemaMigrations = []migration{
 		label:   "users.plan_traffic_limit_bytes (套餐基础额度，用于流量叠加后周期重置)",
 		stmts: []string{
 			`ALTER TABLE users ADD COLUMN IF NOT EXISTS plan_traffic_limit_bytes BIGINT NOT NULL DEFAULT 0`,
+		},
+	},
+	{
+		version: 4,
+		label:   "user_node_daily_usage.raw_* (用户节点实际流量，不含倍率)",
+		stmts: []string{
+			`ALTER TABLE user_node_daily_usage ADD COLUMN IF NOT EXISTS raw_upload_bytes BIGINT NOT NULL DEFAULT 0`,
+			`ALTER TABLE user_node_daily_usage ADD COLUMN IF NOT EXISTS raw_download_bytes BIGINT NOT NULL DEFAULT 0`,
 		},
 	},
 }

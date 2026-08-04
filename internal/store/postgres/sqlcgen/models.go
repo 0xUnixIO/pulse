@@ -345,9 +345,11 @@ type UserInbound struct {
 }
 
 type UserNodeDailyUsage struct {
-	UserID        string
-	NodeID        string
-	Date          string
-	UploadBytes   int64
-	DownloadBytes int64
+	UserID           string
+	NodeID           string
+	Date             string
+	UploadBytes      int64
+	DownloadBytes    int64
+	RawUploadBytes   int64
+	RawDownloadBytes int64
 }

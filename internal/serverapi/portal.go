@@ -362,11 +362,14 @@ func (a *portalAPI) handlePortalNodeUsage(w http.ResponseWriter, r *http.Request
 		nodeNames[n.ID] = n.Name
 	}
 	type nodeUsageItem struct {
-		NodeID        string `json:"node_id"`
-		NodeName      string `json:"node_name"`
-		UploadBytes   int64  `json:"upload_bytes"`
-		DownloadBytes int64  `json:"download_bytes"`
-		TotalBytes    int64  `json:"total_bytes"`
+		NodeID           string `json:"node_id"`
+		NodeName         string `json:"node_name"`
+		UploadBytes      int64  `json:"upload_bytes"`
+		DownloadBytes    int64  `json:"download_bytes"`
+		TotalBytes       int64  `json:"total_bytes"`
+		RawUploadBytes   int64  `json:"raw_upload_bytes"`
+		RawDownloadBytes int64  `json:"raw_download_bytes"`
+		RawTotalBytes    int64  `json:"raw_total_bytes"`
 	}
 	items := make([]nodeUsageItem, 0, len(rawUsage))
 	for _, u := range rawUsage {
@@ -379,11 +382,14 @@ func (a *portalAPI) handlePortalNodeUsage(w http.ResponseWriter, r *http.Request
 			name = u.NodeID
 		}
 		items = append(items, nodeUsageItem{
-			NodeID:        u.NodeID,
-			NodeName:      name,
-			UploadBytes:   u.UploadBytes,
-			DownloadBytes: u.DownloadBytes,
-			TotalBytes:    t,
+			NodeID:           u.NodeID,
+			NodeName:         name,
+			UploadBytes:      u.UploadBytes,
+			DownloadBytes:    u.DownloadBytes,
+			TotalBytes:       t,
+			RawUploadBytes:   u.RawUploadBytes,
+			RawDownloadBytes: u.RawDownloadBytes,
+			RawTotalBytes:    u.RawUploadBytes + u.RawDownloadBytes,
 		})
 	}
 	writeJSON(w, http.StatusOK, map[string]any{"usage": items})

@@ -448,7 +448,7 @@ func SyncUsageWith(ctx context.Context, store users.Store, nodeStore nodes.Store
 			if !ok || !d.hasTraffic {
 				continue
 			}
-			if err := store.AddUserNodeTraffic(userID, fr.node.ID, date, d.upload, d.download); err != nil {
+			if err := store.AddUserNodeTraffic(userID, fr.node.ID, date, d.upload, d.download, d.rawUpload, d.rawDownload); err != nil {
 				result.Errors = append(result.Errors, fr.node.ID+": user node traffic: "+err.Error())
 			}
 		}
