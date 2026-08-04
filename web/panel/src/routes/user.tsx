@@ -16,6 +16,7 @@ import {
   Card,
   CardHeader,
   CardTitle,
+  CardDescription,
   CardContent,
   Badge,
   Button,
@@ -838,6 +839,9 @@ export default function UserPage() {
               <Card>
                 <CardHeader>
                   <CardTitle className="text-lg">节点流量分布</CardTitle>
+                  <CardDescription>
+                    计费流量（实际流量 × 节点倍率），非实际带宽
+                  </CardDescription>
                 </CardHeader>
                 <CardContent>
                   <div className="hidden sm:block">

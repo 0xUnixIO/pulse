@@ -479,7 +479,7 @@ export default function DashboardPage() {
           <Card>
             <CardHeader>
               <CardTitle className="text-sm font-medium text-[hsl(var(--muted-foreground))]">
-                节点流量分布
+                节点流量分布（实际流量）
               </CardTitle>
             </CardHeader>
             <CardContent>
@@ -584,14 +584,14 @@ export default function DashboardPage() {
       {/* ── Today's traffic breakdown ─────────────────────────── */}
       <div className="grid grid-cols-1 gap-4 md:grid-cols-2">
         <TodayTrafficCard
-          title="今日节点流量"
+          title="今日节点流量（实际流量）"
           items={(data?.today_node_stats ?? [])
             .filter((n) => n.total_bytes > 0)
             .sort((a, b) => b.total_bytes - a.total_bytes)
             .map((n) => ({ key: n.id, label: n.name, total: n.total_bytes, drilldown: { type: "node" as const, id: n.id, name: n.name } }))}
         />
         <TodayTrafficCard
-          title="今日用户流量"
+          title="今日用户流量（计费流量）"
           items={(data?.today_user_stats ?? [])
             .filter((u) => u.total_bytes > 0)
             .map((u) => ({ key: u.username, label: u.username, total: u.total_bytes, drilldown: { type: "user" as const, username: u.username } }))}

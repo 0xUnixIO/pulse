@@ -2080,7 +2080,9 @@ function NodeUsageDialog({
       <DialogContent className="sm:max-w-xl">
         <DialogHeader>
           <DialogTitle>节点流量</DialogTitle>
-          <DialogDescription>该用户在各节点的流量使用详情。</DialogDescription>
+          <DialogDescription>
+            该用户在各节点的流量使用详情。此处为计费流量（实际流量 × 节点倍率），非实际带宽。
+          </DialogDescription>
         </DialogHeader>
 
         <ScrollArea className="max-h-[60vh]">
