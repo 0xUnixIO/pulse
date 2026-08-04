@@ -354,12 +354,15 @@ func (m *Manager) Usage(reset bool) coremanager.UsageStats {
 		Reset_:  reset,
 	})
 	if err != nil {
+		// QueryStats 失败：用网卡差值兜底估算节点流量。
 		m.applyNetworkTraffic(&result, reset)
 		return result
 	}
 
 	applyTrafficStats(&result, resp.GetStat())
-	m.applyNetworkTraffic(&result, reset)
+	// 节点总流量以用户明细汇总为准（applyTrafficStats 已赋值），
+	// 仅推进网卡 baseline，保证 QueryStats 失败时的兜底差值不会跨轮累计。
+	m.advanceNetworkBaseline()
 
 	// 填入实时速度
 	m.speedMu.RLock()
@@ -429,8 +432,6 @@ func (m *Manager) Usage(reset bool) coremanager.UsageStats {
 
 func applyTrafficStats(result *coremanager.UsageStats, statsList []*command.Stat) {
 	userTraffic := make(map[string]*coremanager.UserUsage)
-	var inboundUpload, inboundDownload int64
-	hasInboundStats := false
 
 	for _, stat := range statsList {
 		if stat == nil {
@@ -456,14 +457,6 @@ func applyTrafficStats(result *coremanager.UsageStats, statsList []*command.Stat
 			case "downlink":
 				uu.DownloadTotal = stat.GetValue()
 			}
-		case "inbound":
-			hasInboundStats = true
-			switch direction {
-			case "uplink":
-				inboundUpload += stat.GetValue()
-			case "downlink":
-				inboundDownload += stat.GetValue()
-			}
 		}
 	}
 
@@ -474,16 +467,28 @@ func applyTrafficStats(result *coremanager.UsageStats, statsList []*command.Stat
 		userDownload += uu.DownloadTotal
 	}
 
-	if hasInboundStats {
-		result.UploadTotal = inboundUpload
-		result.DownloadTotal = inboundDownload
-		return
-	}
+	// 节点总流量 = 用户明细汇总（实际代理流量，不含未认证/非用户入站流量，
+	// 也不含网卡统计的面板/API/扫描等非代理流量），与用户维度口径一致。
 	result.UploadTotal = userUpload
 	result.DownloadTotal = userDownload
 }
 
 func (m *Manager) resetNetworkBaseline() {
+	rx, tx, err := readNetStats()
+	if err != nil {
+		return
+	}
+	m.netStatsMu.Lock()
+	m.netRxBaseline = rx
+	m.netTxBaseline = tx
+	m.netStatsReady = true
+	m.netStatsMu.Unlock()
+}
+
+// advanceNetworkBaseline 只推进网卡 baseline，不写入 result。
+// 用于 QueryStats 成功路径：节点总流量以用户明细汇总为准，
+// 但 baseline 仍需保持新鲜，避免 QueryStats 失败时兜底差值跨轮累计。
+func (m *Manager) advanceNetworkBaseline() {
 	rx, tx, err := readNetStats()
 	if err != nil {
 		return

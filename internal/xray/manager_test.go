@@ -20,8 +20,10 @@ func TestApplyTrafficStatsUsesInboundTotals(t *testing.T) {
 		{Name: "outbound>>>direct>>>traffic>>>uplink", Value: 999},
 	})
 
-	if result.UploadTotal != 170 || result.DownloadTotal != 230 {
-		t.Fatalf("node traffic=%d/%d, want 170/230", result.UploadTotal, result.DownloadTotal)
+	// 节点总流量始终以用户明细汇总为准（实际代理流量），
+	// inbound/outbound 统计包含非用户流量，一律忽略。
+	if result.UploadTotal != 70 || result.DownloadTotal != 30 {
+		t.Fatalf("node traffic=%d/%d, want user totals 70/30", result.UploadTotal, result.DownloadTotal)
 	}
 	if len(result.Users) != 1 || result.Users[0].UploadTotal != 70 || result.Users[0].DownloadTotal != 30 {
 		t.Fatalf("user traffic=%+v, want alice 70/30", result.Users)
