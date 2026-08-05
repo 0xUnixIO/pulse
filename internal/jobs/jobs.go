@@ -328,8 +328,11 @@ func SyncUsageWith(ctx context.Context, store users.Store, nodeStore nodes.Store
 			hasTraffic  bool
 		}
 		deltaByUser := make(map[string]*userDelta)
-		nodeUploadDelta := fr.usage.UploadTotal
-		nodeDownloadDelta := fr.usage.DownloadTotal
+		// 实际流量按网卡转发放大口径统计：每份用户流量进出节点各计一次，
+		// 上行 = 手机→节点 + 节点→目标，下行 = 目标→节点 + 节点→手机，故 ×2。
+		// 计费流量（d.upload/download）不放大，仍为实际 × 节点倍率。
+		nodeUploadDelta := fr.usage.UploadTotal * 2
+		nodeDownloadDelta := fr.usage.DownloadTotal * 2
 		for _, item := range fr.usage.Users {
 			realUser, ibTag := parseCompositeUser(item.User)
 			rate := 1.0
@@ -343,8 +346,8 @@ func SyncUsageWith(ctx context.Context, store users.Store, nodeStore nodes.Store
 				d = &userDelta{sourceIPs: make(map[string]struct{})}
 				deltaByUser[realUser] = d
 			}
-			d.rawUpload += item.UploadTotal
-			d.rawDownload += item.DownloadTotal
+			d.rawUpload += item.UploadTotal * 2
+			d.rawDownload += item.DownloadTotal * 2
 			d.upload += applyRate(item.UploadTotal, rate)
 			d.download += applyRate(item.DownloadTotal, rate)
 			d.connections += item.Connections
@@ -358,8 +361,8 @@ func SyncUsageWith(ctx context.Context, store users.Store, nodeStore nodes.Store
 		}
 		if nodeUploadDelta == 0 && nodeDownloadDelta == 0 {
 			for _, item := range fr.usage.Users {
-				nodeUploadDelta += item.UploadTotal
-				nodeDownloadDelta += item.DownloadTotal
+				nodeUploadDelta += item.UploadTotal * 2
+				nodeDownloadDelta += item.DownloadTotal * 2
 			}
 		}
 

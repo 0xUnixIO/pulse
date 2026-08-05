@@ -215,13 +215,13 @@ func TestSyncUsage_TrafficRate_Double(t *testing.T) {
 		t.Errorf("used: want 220, got %d", alice.UsedBytes)
 	}
 
-	// 节点记录真实流量，不受倍率影响
+	// 节点记录实际流量（转发放大口径 ×2），不受倍率影响
 	node, _ := nodeStore.Get("n1")
-	if node.UploadBytes != 80 {
-		t.Errorf("node upload: want 80, got %d", node.UploadBytes)
+	if node.UploadBytes != 160 {
+		t.Errorf("node upload: want 160, got %d", node.UploadBytes)
 	}
-	if node.DownloadBytes != 30 {
-		t.Errorf("node download: want 30, got %d", node.DownloadBytes)
+	if node.DownloadBytes != 60 {
+		t.Errorf("node download: want 60, got %d", node.DownloadBytes)
 	}
 }
 
@@ -260,13 +260,13 @@ func TestSyncUsage_TrafficRate_Half(t *testing.T) {
 		t.Errorf("used: want 55, got %d", alice.UsedBytes)
 	}
 
-	// 节点记录真实流量，不受倍率影响
+	// 节点记录实际流量（转发放大口径 ×2），不受倍率影响
 	node, _ := nodeStore.Get("n1")
-	if node.UploadBytes != 80 {
-		t.Errorf("node upload: want 80, got %d", node.UploadBytes)
+	if node.UploadBytes != 160 {
+		t.Errorf("node upload: want 160, got %d", node.UploadBytes)
 	}
-	if node.DownloadBytes != 30 {
-		t.Errorf("node download: want 30, got %d", node.DownloadBytes)
+	if node.DownloadBytes != 60 {
+		t.Errorf("node download: want 60, got %d", node.DownloadBytes)
 	}
 }
 
@@ -348,13 +348,13 @@ func TestSyncUsage_MultiInbound_NoDuplicateCounting(t *testing.T) {
 		t.Errorf("used: want 110, got %d", alice.UsedBytes)
 	}
 
-	// 节点流量也只应计一次
+	// 节点流量也只应计一次（转发放大口径 ×2）
 	node, _ := nodeStore.Get("n1")
-	if node.UploadBytes != 80 {
-		t.Errorf("node upload: want 80, got %d", node.UploadBytes)
+	if node.UploadBytes != 160 {
+		t.Errorf("node upload: want 160, got %d", node.UploadBytes)
 	}
-	if node.DownloadBytes != 30 {
-		t.Errorf("node download: want 30, got %d", node.DownloadBytes)
+	if node.DownloadBytes != 60 {
+		t.Errorf("node download: want 60, got %d", node.DownloadBytes)
 	}
 }
 
@@ -679,12 +679,12 @@ func TestSyncUsage_NodeTraffic_AccumulatedCorrectly(t *testing.T) {
 	}
 
 	node, _ := nodeStore.Get("n1")
-	// 节点流量 = alice(100+50) + bob(40+20) 的真实值（不含倍率）
-	if node.UploadBytes != 140 {
-		t.Errorf("node upload: want 140, got %d", node.UploadBytes)
+	// 节点流量 = alice(100+50) + bob(40+20) 的实际值 ×2（转发放大口径）
+	if node.UploadBytes != 280 {
+		t.Errorf("node upload: want 280, got %d", node.UploadBytes)
 	}
-	if node.DownloadBytes != 70 {
-		t.Errorf("node download: want 70, got %d", node.DownloadBytes)
+	if node.DownloadBytes != 140 {
+		t.Errorf("node download: want 140, got %d", node.DownloadBytes)
 	}
 
 	// 用户计费流量含倍率 3.0
@@ -774,13 +774,13 @@ func TestSyncUsage_DeletedUser_NodeTrafficStillCounted(t *testing.T) {
 		t.Errorf("alice upload: want 100, got %d", alice.UploadBytes)
 	}
 
-	// 节点流量应包含 alice + bob = 140 upload, 70 download
+	// 节点流量应包含 alice + bob = 140 upload, 70 download（×2 转发放大 = 280/140）
 	node, _ := nodeStore.Get("n1")
-	if node.UploadBytes != 140 {
-		t.Errorf("node upload: want 140 (alice 100 + bob 40), got %d", node.UploadBytes)
+	if node.UploadBytes != 280 {
+		t.Errorf("node upload: want 280 (alice 100 + bob 40) ×2, got %d", node.UploadBytes)
 	}
-	if node.DownloadBytes != 70 {
-		t.Errorf("node download: want 70 (alice 50 + bob 20), got %d", node.DownloadBytes)
+	if node.DownloadBytes != 140 {
+		t.Errorf("node download: want 140 (alice 50 + bob 20) ×2, got %d", node.DownloadBytes)
 	}
 }
 

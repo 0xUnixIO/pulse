@@ -58,8 +58,8 @@ func TestSyncUsage_PushPath(t *testing.T) {
 		t.Errorf("alice.UsedBytes=%d, want 100", alice.UsedBytes)
 	}
 	node, _ := nodeStore.Get("n1")
-	if node.UploadBytes != 170 || node.DownloadBytes != 230 {
-		t.Errorf("node traffic=%d/%d, want inbound totals 170/230", node.UploadBytes, node.DownloadBytes)
+	if node.UploadBytes != 340 || node.DownloadBytes != 460 {
+		t.Errorf("node traffic=%d/%d, want inbound totals 170/230 ×2", node.UploadBytes, node.DownloadBytes)
 	}
 	if usageCalls != 0 {
 		t.Errorf("expected no on-demand usage call (push path), got %d", usageCalls)
@@ -202,8 +202,8 @@ func TestSyncUsage_PushSurvivesDialError(t *testing.T) {
 		t.Fatalf("alice.UsedBytes=%d want 100 (push must survive dial error)", alice.UsedBytes)
 	}
 	node, _ := nodeStore.Get("n1")
-	if node.UploadBytes != 70 || node.DownloadBytes != 30 {
-		t.Fatalf("node traffic=%d/%d want 70/30", node.UploadBytes, node.DownloadBytes)
+	if node.UploadBytes != 140 || node.DownloadBytes != 60 {
+		t.Fatalf("node traffic=%d/%d want 70/30 ×2", node.UploadBytes, node.DownloadBytes)
 	}
 }
 
