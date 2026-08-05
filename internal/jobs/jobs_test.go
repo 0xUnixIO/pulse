@@ -169,8 +169,8 @@ func TestSyncUsage_UpdatesBytesAndReloads(t *testing.T) {
 	}
 
 	alice, _ := userStore.GetUser("u1")
-	if alice.UsedBytes != 110 {
-		t.Fatalf("expected used=110, got %d", alice.UsedBytes)
+	if alice.UsedBytes != 220 {
+		t.Fatalf("expected used=220, got %d", alice.UsedBytes)
 	}
 	if alice.EffectiveEnabled() {
 		t.Fatal("expected alice limited after exceeding quota")
@@ -204,15 +204,15 @@ func TestSyncUsage_TrafficRate_Double(t *testing.T) {
 	}
 
 	alice, _ := userStore.GetUser("u1")
-	// 用户计费流量 = (80+30) * 2 = 220
-	if alice.UploadBytes != 160 {
-		t.Errorf("upload: want 160, got %d", alice.UploadBytes)
+	// 用户计费流量 = (80+30) * 2（转发放大）× 倍率 2 = 440
+	if alice.UploadBytes != 320 {
+		t.Errorf("upload: want 320, got %d", alice.UploadBytes)
 	}
-	if alice.DownloadBytes != 60 {
-		t.Errorf("download: want 60, got %d", alice.DownloadBytes)
+	if alice.DownloadBytes != 120 {
+		t.Errorf("download: want 120, got %d", alice.DownloadBytes)
 	}
-	if alice.UsedBytes != 220 {
-		t.Errorf("used: want 220, got %d", alice.UsedBytes)
+	if alice.UsedBytes != 440 {
+		t.Errorf("used: want 440, got %d", alice.UsedBytes)
 	}
 
 	// 节点记录实际流量（转发放大口径 ×2），不受倍率影响
@@ -249,15 +249,15 @@ func TestSyncUsage_TrafficRate_Half(t *testing.T) {
 	}
 
 	alice, _ := userStore.GetUser("u1")
-	// 用户计费流量 = (80+30) * 0.5 = 55
-	if alice.UploadBytes != 40 {
-		t.Errorf("upload: want 40, got %d", alice.UploadBytes)
+	// 用户计费流量 = (80+30) * 2（转发放大）× 倍率 0.5 = 110
+	if alice.UploadBytes != 80 {
+		t.Errorf("upload: want 80, got %d", alice.UploadBytes)
 	}
-	if alice.DownloadBytes != 15 {
-		t.Errorf("download: want 15, got %d", alice.DownloadBytes)
+	if alice.DownloadBytes != 30 {
+		t.Errorf("download: want 30, got %d", alice.DownloadBytes)
 	}
-	if alice.UsedBytes != 55 {
-		t.Errorf("used: want 55, got %d", alice.UsedBytes)
+	if alice.UsedBytes != 110 {
+		t.Errorf("used: want 110, got %d", alice.UsedBytes)
 	}
 
 	// 节点记录实际流量（转发放大口径 ×2），不受倍率影响
@@ -294,11 +294,11 @@ func TestSyncUsage_TrafficRate_QuotaWithRate(t *testing.T) {
 	}
 
 	alice, _ := userStore.GetUser("u1")
-	if alice.UsedBytes != 120 {
-		t.Errorf("used: want 120, got %d", alice.UsedBytes)
+	if alice.UsedBytes != 240 {
+		t.Errorf("used: want 240, got %d", alice.UsedBytes)
 	}
 	if alice.EffectiveEnabled() {
-		t.Error("alice should be limited (120 > 100) but is still enabled")
+		t.Error("alice should be limited (240 > 100) but is still enabled")
 	}
 }
 
@@ -337,15 +337,15 @@ func TestSyncUsage_MultiInbound_NoDuplicateCounting(t *testing.T) {
 	}
 
 	alice, _ := userStore.GetUser("u1")
-	// 流量应只计一次：80 + 30 = 110，而非 4 倍的 440
-	if alice.UploadBytes != 80 {
-		t.Errorf("upload: want 80, got %d", alice.UploadBytes)
+	// 流量应只计一次：80 + 30 = 110，×2 转发放大 = 220（而非 4 倍的 440×2）
+	if alice.UploadBytes != 160 {
+		t.Errorf("upload: want 160, got %d", alice.UploadBytes)
 	}
-	if alice.DownloadBytes != 30 {
-		t.Errorf("download: want 30, got %d", alice.DownloadBytes)
+	if alice.DownloadBytes != 60 {
+		t.Errorf("download: want 60, got %d", alice.DownloadBytes)
 	}
-	if alice.UsedBytes != 110 {
-		t.Errorf("used: want 110, got %d", alice.UsedBytes)
+	if alice.UsedBytes != 220 {
+		t.Errorf("used: want 220, got %d", alice.UsedBytes)
 	}
 
 	// 节点流量也只应计一次（转发放大口径 ×2）
@@ -389,15 +389,15 @@ func TestSyncUsage_MultiInbound_NewInboundAdded(t *testing.T) {
 	}
 
 	alice, _ := userStore.GetUser("u1")
-	// Delta is directly 30/10 from V2Ray Stats
-	if alice.UploadBytes != 30 {
-		t.Errorf("upload: want 30, got %d", alice.UploadBytes)
+	// Delta is directly 30/10 from V2Ray Stats, ×2 转发放大
+	if alice.UploadBytes != 60 {
+		t.Errorf("upload: want 60, got %d", alice.UploadBytes)
 	}
-	if alice.DownloadBytes != 10 {
-		t.Errorf("download: want 10, got %d", alice.DownloadBytes)
+	if alice.DownloadBytes != 20 {
+		t.Errorf("download: want 20, got %d", alice.DownloadBytes)
 	}
-	if alice.UsedBytes != 40 {
-		t.Errorf("used: want 40, got %d", alice.UsedBytes)
+	if alice.UsedBytes != 80 {
+		t.Errorf("used: want 80, got %d", alice.UsedBytes)
 	}
 }
 
@@ -521,12 +521,12 @@ func TestSyncUsage_NodeRestart_DeltaFromZero(t *testing.T) {
 	}
 
 	alice, _ := userStore.GetUser("u1")
-	// V2Ray Stats returns delta directly: 10/5
-	if alice.UploadBytes != 110 {
-		t.Errorf("upload: want 110 (100+10), got %d", alice.UploadBytes)
+	// V2Ray Stats returns delta directly: 10/5（×2 转发放大 = 20/10）
+	if alice.UploadBytes != 120 {
+		t.Errorf("upload: want 120 (100+20), got %d", alice.UploadBytes)
 	}
-	if alice.DownloadBytes != 55 {
-		t.Errorf("download: want 55 (50+5), got %d", alice.DownloadBytes)
+	if alice.DownloadBytes != 60 {
+		t.Errorf("download: want 60 (50+10), got %d", alice.DownloadBytes)
 	}
 }
 
@@ -687,14 +687,14 @@ func TestSyncUsage_NodeTraffic_AccumulatedCorrectly(t *testing.T) {
 		t.Errorf("node download: want 140, got %d", node.DownloadBytes)
 	}
 
-	// 用户计费流量含倍率 3.0
+	// 用户计费流量含倍率 3.0（×2 转发放大后 = 实际 ×2 × 3）
 	alice, _ := userStore.GetUser("u1")
-	if alice.UploadBytes != 300 {
-		t.Errorf("alice upload: want 300 (100*3), got %d", alice.UploadBytes)
+	if alice.UploadBytes != 600 {
+		t.Errorf("alice upload: want 600 (100*2*3), got %d", alice.UploadBytes)
 	}
 	bob, _ := userStore.GetUser("u2")
-	if bob.UploadBytes != 120 {
-		t.Errorf("bob upload: want 120 (40*3), got %d", bob.UploadBytes)
+	if bob.UploadBytes != 240 {
+		t.Errorf("bob upload: want 240 (40*2*3), got %d", bob.UploadBytes)
 	}
 }
 
@@ -768,10 +768,10 @@ func TestSyncUsage_DeletedUser_NodeTrafficStillCounted(t *testing.T) {
 		t.Fatalf("SyncUsage() error = %v", err)
 	}
 
-	// alice 的用户流量应正常累加
+	// alice 的用户流量应正常累加（×2 转发放大）
 	alice, _ := userStore.GetUser("u1")
-	if alice.UploadBytes != 100 {
-		t.Errorf("alice upload: want 100, got %d", alice.UploadBytes)
+	if alice.UploadBytes != 200 {
+		t.Errorf("alice upload: want 200, got %d", alice.UploadBytes)
 	}
 
 	// 节点流量应包含 alice + bob = 140 upload, 70 download（×2 转发放大 = 280/140）

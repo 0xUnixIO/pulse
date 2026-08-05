@@ -330,7 +330,7 @@ func SyncUsageWith(ctx context.Context, store users.Store, nodeStore nodes.Store
 		deltaByUser := make(map[string]*userDelta)
 		// 实际流量按网卡转发放大口径统计：每份用户流量进出节点各计一次，
 		// 上行 = 手机→节点 + 节点→目标，下行 = 目标→节点 + 节点→手机，故 ×2。
-		// 计费流量（d.upload/download）不放大，仍为实际 × 节点倍率。
+		// 计费流量同样按 ×2 后的实际计算（计费 = 实际 × 节点倍率）。
 		nodeUploadDelta := fr.usage.UploadTotal * 2
 		nodeDownloadDelta := fr.usage.DownloadTotal * 2
 		for _, item := range fr.usage.Users {
@@ -348,8 +348,8 @@ func SyncUsageWith(ctx context.Context, store users.Store, nodeStore nodes.Store
 			}
 			d.rawUpload += item.UploadTotal * 2
 			d.rawDownload += item.DownloadTotal * 2
-			d.upload += applyRate(item.UploadTotal, rate)
-			d.download += applyRate(item.DownloadTotal, rate)
+			d.upload += applyRate(item.UploadTotal, rate) * 2
+			d.download += applyRate(item.DownloadTotal, rate) * 2
 			d.connections += item.Connections
 			d.devices += item.Devices
 			for _, ip := range item.SourceIPs {

@@ -645,8 +645,8 @@ func TestE2E_UsagePushAck(t *testing.T) {
 		t.Fatalf("UsersUpdated=%d want 1", res.UsersUpdated)
 	}
 	alice, _ := userStore.GetUser("u1")
-	if alice.UsedBytes != 300 {
-		t.Fatalf("alice.UsedBytes=%d want 300", alice.UsedBytes)
+	if alice.UsedBytes != 600 {
+		t.Fatalf("alice.UsedBytes=%d want 600 (300×2)", alice.UsedBytes)
 	}
 
 	// 验证 baseline 推进：再加一些流量，第三次 push 的 delta 仅是新增量
@@ -660,8 +660,8 @@ func TestE2E_UsagePushAck(t *testing.T) {
 		t.Fatalf("SyncUsageWith#2: %v", err)
 	}
 	alice2, _ := userStore.GetUser("u1")
-	if delta := alice2.UsedBytes - alice.UsedBytes; delta != 20 {
-		t.Fatalf("second-round delta=%d want 20 (baseline correctly advanced)", delta)
+	if delta := alice2.UsedBytes - alice.UsedBytes; delta != 40 {
+		t.Fatalf("second-round delta=%d want 40 (baseline correctly advanced, ×2)", delta)
 	}
 }
 
@@ -942,10 +942,10 @@ func TestE2E_MultiNode(t *testing.T) {
 	if res.UsersUpdated != numNodes {
 		t.Fatalf("UsersUpdated=%d want %d (one per user_inbound access)", res.UsersUpdated, numNodes)
 	}
-	// sum_i (10*(i+1) + 20*(i+1)) for i=0..4 = 30 * (1+2+3+4+5) = 450
+	// sum_i (10*(i+1) + 20*(i+1)) for i=0..4 = 30 * (1+2+3+4+5) = 450，×2 = 900
 	alice, _ := userStore.GetUser("u1")
-	if alice.UsedBytes != 450 {
-		t.Fatalf("alice.UsedBytes=%d want 450", alice.UsedBytes)
+	if alice.UsedBytes != 900 {
+		t.Fatalf("alice.UsedBytes=%d want 900", alice.UsedBytes)
 	}
 
 	// 优雅关闭
