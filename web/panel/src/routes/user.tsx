@@ -843,7 +843,7 @@ export default function UserPage() {
                 <CardHeader>
                   <CardTitle className="text-lg">节点流量分布</CardTitle>
                   <CardDescription>
-                    实际 = 不含倍率的真实流量；计费 = 实际 × 节点倍率
+                    计费流量 = 实际流量 × 节点倍率
                   </CardDescription>
                 </CardHeader>
                 <CardContent>
@@ -854,7 +854,6 @@ export default function UserPage() {
                           <TableHead>节点</TableHead>
                           <TableHead className="text-right">上传</TableHead>
                           <TableHead className="text-right">下载</TableHead>
-                          <TableHead className="text-right">实际</TableHead>
                           <TableHead className="text-right">计费</TableHead>
                         </TableRow>
                       </TableHeader>
@@ -864,11 +863,6 @@ export default function UserPage() {
                             <TableCell className="font-medium">{n.node_name}</TableCell>
                             <TableCell className="text-right">{formatBytes(n.upload_bytes)}</TableCell>
                             <TableCell className="text-right">{formatBytes(n.download_bytes)}</TableCell>
-                            <TableCell className="text-right text-[hsl(var(--muted-foreground))]">
-                              {n.raw_total_bytes > 0 && n.raw_total_bytes !== n.total_bytes
-                                ? formatBytes(n.raw_total_bytes)
-                                : "-"}
-                            </TableCell>
                             <TableCell className="text-right font-medium">{formatBytes(n.total_bytes)}</TableCell>
                           </TableRow>
                         ))}
@@ -883,11 +877,7 @@ export default function UserPage() {
                         <div key={n.node_id} className="rounded-lg border border-[hsl(var(--border))] p-3">
                           <div className="mb-1 flex items-center justify-between">
                             <span className="text-sm font-medium">{n.node_name}</span>
-                            <span className="text-sm font-medium">
-                              {n.raw_total_bytes > 0 && n.raw_total_bytes !== n.total_bytes
-                                ? `${formatBytes(n.raw_total_bytes)} → ${formatBytes(n.total_bytes)}`
-                                : formatBytes(n.total_bytes)}
-                            </span>
+                            <span className="text-sm font-medium">{formatBytes(n.total_bytes)}</span>
                           </div>
                           <div className="h-1.5 w-full overflow-hidden rounded-full bg-[hsl(var(--muted))]">
                             <div className="h-full rounded-full bg-blue-500" style={{ width: `${barPct}%` }} />
