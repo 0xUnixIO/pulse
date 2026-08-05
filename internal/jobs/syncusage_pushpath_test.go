@@ -54,12 +54,12 @@ func TestSyncUsage_PushPath(t *testing.T) {
 		t.Errorf("UsersUpdated=%d, want 1; result=%+v", result.UsersUpdated, result)
 	}
 	alice, _ := userStore.GetUser("u1")
-	if alice.UsedBytes != 200 {
-		t.Errorf("alice.UsedBytes=%d, want 200", alice.UsedBytes)
+	if alice.UsedBytes != 220 {
+		t.Errorf("alice.UsedBytes=%d, want 220", alice.UsedBytes)
 	}
 	node, _ := nodeStore.Get("n1")
-	if node.UploadBytes != 340 || node.DownloadBytes != 460 {
-		t.Errorf("node traffic=%d/%d, want inbound totals 170/230 ×2", node.UploadBytes, node.DownloadBytes)
+	if node.UploadBytes != 374 || node.DownloadBytes != 506 {
+		t.Errorf("node traffic=%d/%d, want inbound totals 170/230 ×2.2", node.UploadBytes, node.DownloadBytes)
 	}
 	if usageCalls != 0 {
 		t.Errorf("expected no on-demand usage call (push path), got %d", usageCalls)
@@ -79,8 +79,8 @@ func TestSyncUsage_PushPath(t *testing.T) {
 		t.Errorf("seen push node must not fall back to on-demand usage, got %d calls", usageCalls)
 	}
 	alice, _ = userStore.GetUser("u1")
-	if alice.UsedBytes != 200 {
-		t.Errorf("alice.UsedBytes after idle push cycle=%d, want 200", alice.UsedBytes)
+	if alice.UsedBytes != 220 {
+		t.Errorf("alice.UsedBytes after idle push cycle=%d, want 220", alice.UsedBytes)
 	}
 }
 
@@ -109,8 +109,8 @@ func TestSyncUsage_OnDemandFallback(t *testing.T) {
 		t.Errorf("UsersUpdated=%d, want 1; errors=%v", result.UsersUpdated, result.Errors)
 	}
 	alice, _ := userStore.GetUser("u1")
-	if alice.UsedBytes != 140 {
-		t.Errorf("alice.UsedBytes=%d, want 140", alice.UsedBytes)
+	if alice.UsedBytes != 154 {
+		t.Errorf("alice.UsedBytes=%d, want 154", alice.UsedBytes)
 	}
 }
 
@@ -164,8 +164,8 @@ func TestSyncUsage_MixedPushAndOnDemand(t *testing.T) {
 	}
 	alice, _ := userStore.GetUser("u1")
 	// n1 push delta (100+200) + n2 on-demand fallback (11+22) = 333，×2 = 666
-	if alice.UsedBytes != 666 {
-		t.Errorf("alice.UsedBytes=%d, want 666 (push n1=600 + on-demand n2=66)", alice.UsedBytes)
+	if alice.UsedBytes != 732 {
+		t.Errorf("alice.UsedBytes=%d, want 732 (push n1=660 + on-demand n2=72)", alice.UsedBytes)
 	}
 }
 
@@ -198,12 +198,12 @@ func TestSyncUsage_PushSurvivesDialError(t *testing.T) {
 		t.Fatalf("UsersUpdated=%d want 1; errors=%v", res.UsersUpdated, res.Errors)
 	}
 	alice, _ := userStore.GetUser("u1")
-	if alice.UsedBytes != 200 {
-		t.Fatalf("alice.UsedBytes=%d want 200 (push must survive dial error)", alice.UsedBytes)
+	if alice.UsedBytes != 220 {
+		t.Fatalf("alice.UsedBytes=%d want 220 (push must survive dial error)", alice.UsedBytes)
 	}
 	node, _ := nodeStore.Get("n1")
-	if node.UploadBytes != 140 || node.DownloadBytes != 60 {
-		t.Fatalf("node traffic=%d/%d want 70/30 ×2", node.UploadBytes, node.DownloadBytes)
+	if node.UploadBytes != 154 || node.DownloadBytes != 66 {
+		t.Fatalf("node traffic=%d/%d want 70/30 ×2.2", node.UploadBytes, node.DownloadBytes)
 	}
 }
 
@@ -247,8 +247,8 @@ func TestSyncUsage_DisabledNodeKeepsPushBuffer(t *testing.T) {
 		t.Fatalf("SyncUsageWith(enabled): %v", err)
 	}
 	alice, _ = userStore.GetUser("u1")
-	if alice.UsedBytes != 100 {
-		t.Fatalf("after re-enable used=%d want 100", alice.UsedBytes)
+	if alice.UsedBytes != 110 {
+		t.Fatalf("after re-enable used=%d want 110", alice.UsedBytes)
 	}
 }
 
@@ -277,7 +277,7 @@ func TestSyncUsage_UnavailableWithBytesStillCounts(t *testing.T) {
 		t.Fatalf("SyncUsageWith: %v", err)
 	}
 	alice, _ := userStore.GetUser("u1")
-	if alice.UsedBytes != 40 {
-		t.Fatalf("used=%d want 40", alice.UsedBytes)
+	if alice.UsedBytes != 43 {
+		t.Fatalf("used=%d want 43 (12→26 + 8→17, per-item ×2.2 截断)", alice.UsedBytes)
 	}
 }

@@ -337,8 +337,8 @@ func TestSyncUsageDisablesLimitedUserAndReloadsNode(t *testing.T) {
 	if alice.EffectiveEnabled() {
 		t.Fatalf("expected alice disabled after exceeding limit: %#v", alice)
 	}
-	if alice.UsedBytes != 240 {
-		t.Fatalf("expected alice used bytes 240 (×2), got %d", alice.UsedBytes)
+	if alice.UsedBytes != 264 {
+		t.Fatalf("expected alice used bytes 264 (×2.2), got %d", alice.UsedBytes)
 	}
 
 	bob, err := userStore.GetUser("u2")
