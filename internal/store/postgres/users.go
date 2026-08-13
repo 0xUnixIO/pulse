@@ -76,14 +76,20 @@ func (s *UserStore) ResetTrafficForValidity(userID string, now time.Time, validi
 		    used_bytes = 0,
 		    raw_upload_bytes = 0,
 		    raw_download_bytes = 0,
-		    last_traffic_reset_at = $2,
-		    expire_at = (expire_at::timestamptz - make_interval(days => $3))::text
+		    last_traffic_reset_at = to_char(
+		        $2::timestamptz AT TIME ZONE 'UTC',
+		        'YYYY-MM-DD"T"HH24:MI:SS.US"Z"'
+		    ),
+		    expire_at = to_char(
+		        (expire_at::timestamptz - make_interval(days => $3)) AT TIME ZONE 'UTC',
+		        'YYYY-MM-DD"T"HH24:MI:SS.US"Z"'
+		    )
 		WHERE id = $1
 		  AND status IN ('active', 'limited')
 		  AND upload_bytes + download_bytes > 0
 		  AND expire_at IS NOT NULL
 		  AND expire_at::timestamptz > $2::timestamptz + make_interval(days => $3)
-	`, userID, now.Format(time.RFC3339Nano), validityCostDays)
+	`, userID, now, validityCostDays)
 	if err != nil {
 		return users.User{}, fmt.Errorf("reset traffic for validity: %w", err)
 	}
@@ -530,35 +536,35 @@ func toUser(r sqlcgen.User) (users.User, error) {
 		u.DataLimitResetStrategy = users.ResetStrategyNoReset
 	}
 	if r.CreatedAt != "" {
-		t, err := time.Parse(time.RFC3339Nano, r.CreatedAt)
+		t, err := parseStoredTime(r.CreatedAt)
 		if err != nil {
 			return users.User{}, fmt.Errorf("parse user created_at: %w", err)
 		}
 		u.CreatedAt = t
 	}
 	if r.ExpireAt != nil && *r.ExpireAt != "" {
-		t, err := time.Parse(time.RFC3339Nano, *r.ExpireAt)
+		t, err := parseStoredTime(*r.ExpireAt)
 		if err != nil {
 			return users.User{}, fmt.Errorf("parse user expire_at: %w", err)
 		}
 		u.ExpireAt = &t
 	}
 	if r.OnHoldExpireAt != nil && *r.OnHoldExpireAt != "" {
-		t, err := time.Parse(time.RFC3339Nano, *r.OnHoldExpireAt)
+		t, err := parseStoredTime(*r.OnHoldExpireAt)
 		if err != nil {
 			return users.User{}, fmt.Errorf("parse user on_hold_expire_at: %w", err)
 		}
 		u.OnHoldExpireAt = &t
 	}
 	if r.LastTrafficResetAt != nil && *r.LastTrafficResetAt != "" {
-		t, err := time.Parse(time.RFC3339Nano, *r.LastTrafficResetAt)
+		t, err := parseStoredTime(*r.LastTrafficResetAt)
 		if err != nil {
 			return users.User{}, fmt.Errorf("parse user last_traffic_reset_at: %w", err)
 		}
 		u.LastTrafficResetAt = &t
 	}
 	if r.OnlineAt != nil && *r.OnlineAt != "" {
-		t, err := time.Parse(time.RFC3339Nano, *r.OnlineAt)
+		t, err := parseStoredTime(*r.OnlineAt)
 		if err != nil {
 			return users.User{}, fmt.Errorf("parse user online_at: %w", err)
 		}
@@ -577,6 +583,23 @@ func toUsers(rows []sqlcgen.User) ([]users.User, error) {
 		out = append(out, u)
 	}
 	return out, nil
+}
+
+func parseStoredTime(value string) (time.Time, error) {
+	layouts := [...]string{
+		time.RFC3339Nano,
+		"2006-01-02 15:04:05.999999999-07",
+		"2006-01-02 15:04:05.999999999-07:00",
+	}
+	var err error
+	for _, layout := range layouts {
+		var parsed time.Time
+		parsed, err = time.Parse(layout, value)
+		if err == nil {
+			return parsed, nil
+		}
+	}
+	return time.Time{}, err
 }
 
 func toUserInbound(r sqlcgen.UserInbound) (users.UserInbound, error) {
