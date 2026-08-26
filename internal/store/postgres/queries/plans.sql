@@ -52,8 +52,10 @@ SELECT id, name, description, type, price_cents, currency,
 FROM plans WHERE enabled = 1 AND mode = $1 ORDER BY sort_order, id;
 
 -- name: IncrementPlanStockSold :execresult
-UPDATE plans SET stock_sold = stock_sold + 1
-WHERE id = $1 AND (stock_limit = -1 OR stock_sold < stock_limit);
+UPDATE plans SET stock_sold = stock_sold + sqlc.arg(quantity)
+WHERE id = sqlc.arg(plan_id)
+  AND sqlc.arg(quantity) > 0
+  AND (stock_limit = -1 OR stock_sold + sqlc.arg(quantity) <= stock_limit);
 
 -- name: DeletePlanByID :execresult
 DELETE FROM plans WHERE id = $1;

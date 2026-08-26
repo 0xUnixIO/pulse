@@ -50,7 +50,7 @@ func (q *Queries) DeleteOrderByID(ctx context.Context, id string) (pgconn.Comman
 const getOrderByID = `-- name: GetOrderByID :one
 SELECT id, user_id, plan_id, email, stripe_session_id,
        stripe_subscription_id, stripe_customer_id,
-       status, amount_cents, currency, created_at, paid_at, last_invoice_id
+       status, amount_cents, quantity, currency, created_at, paid_at, last_invoice_id
 FROM orders WHERE id = $1
 `
 
@@ -67,6 +67,7 @@ func (q *Queries) GetOrderByID(ctx context.Context, id string) (Order, error) {
 		&i.StripeCustomerID,
 		&i.Status,
 		&i.AmountCents,
+		&i.Quantity,
 		&i.Currency,
 		&i.CreatedAt,
 		&i.PaidAt,
@@ -78,7 +79,7 @@ func (q *Queries) GetOrderByID(ctx context.Context, id string) (Order, error) {
 const getOrderByStripeSession = `-- name: GetOrderByStripeSession :one
 SELECT id, user_id, plan_id, email, stripe_session_id,
        stripe_subscription_id, stripe_customer_id,
-       status, amount_cents, currency, created_at, paid_at, last_invoice_id
+       status, amount_cents, quantity, currency, created_at, paid_at, last_invoice_id
 FROM orders WHERE stripe_session_id = $1
 `
 
@@ -95,6 +96,7 @@ func (q *Queries) GetOrderByStripeSession(ctx context.Context, stripeSessionID s
 		&i.StripeCustomerID,
 		&i.Status,
 		&i.AmountCents,
+		&i.Quantity,
 		&i.Currency,
 		&i.CreatedAt,
 		&i.PaidAt,
@@ -106,7 +108,7 @@ func (q *Queries) GetOrderByStripeSession(ctx context.Context, stripeSessionID s
 const getOrderByStripeSubscription = `-- name: GetOrderByStripeSubscription :one
 SELECT id, user_id, plan_id, email, stripe_session_id,
        stripe_subscription_id, stripe_customer_id,
-       status, amount_cents, currency, created_at, paid_at, last_invoice_id
+       status, amount_cents, quantity, currency, created_at, paid_at, last_invoice_id
 FROM orders WHERE stripe_subscription_id = $1
 `
 
@@ -123,6 +125,7 @@ func (q *Queries) GetOrderByStripeSubscription(ctx context.Context, stripeSubscr
 		&i.StripeCustomerID,
 		&i.Status,
 		&i.AmountCents,
+		&i.Quantity,
 		&i.Currency,
 		&i.CreatedAt,
 		&i.PaidAt,
@@ -134,7 +137,7 @@ func (q *Queries) GetOrderByStripeSubscription(ctx context.Context, stripeSubscr
 const listOrders = `-- name: ListOrders :many
 SELECT id, user_id, plan_id, email, stripe_session_id,
        stripe_subscription_id, stripe_customer_id,
-       status, amount_cents, currency, created_at, paid_at, last_invoice_id
+       status, amount_cents, quantity, currency, created_at, paid_at, last_invoice_id
 FROM orders ORDER BY created_at DESC
 `
 
@@ -157,6 +160,7 @@ func (q *Queries) ListOrders(ctx context.Context) ([]Order, error) {
 			&i.StripeCustomerID,
 			&i.Status,
 			&i.AmountCents,
+			&i.Quantity,
 			&i.Currency,
 			&i.CreatedAt,
 			&i.PaidAt,
@@ -175,7 +179,7 @@ func (q *Queries) ListOrders(ctx context.Context) ([]Order, error) {
 const listOrdersByEmail = `-- name: ListOrdersByEmail :many
 SELECT id, user_id, plan_id, email, stripe_session_id,
        stripe_subscription_id, stripe_customer_id,
-       status, amount_cents, currency, created_at, paid_at, last_invoice_id
+       status, amount_cents, quantity, currency, created_at, paid_at, last_invoice_id
 FROM orders WHERE email = $1 ORDER BY created_at DESC
 `
 
@@ -198,6 +202,7 @@ func (q *Queries) ListOrdersByEmail(ctx context.Context, email string) ([]Order,
 			&i.StripeCustomerID,
 			&i.Status,
 			&i.AmountCents,
+			&i.Quantity,
 			&i.Currency,
 			&i.CreatedAt,
 			&i.PaidAt,
@@ -216,7 +221,7 @@ func (q *Queries) ListOrdersByEmail(ctx context.Context, email string) ([]Order,
 const listOrdersByUser = `-- name: ListOrdersByUser :many
 SELECT id, user_id, plan_id, email, stripe_session_id,
        stripe_subscription_id, stripe_customer_id,
-       status, amount_cents, currency, created_at, paid_at, last_invoice_id
+       status, amount_cents, quantity, currency, created_at, paid_at, last_invoice_id
 FROM orders WHERE user_id = $1 ORDER BY created_at DESC
 `
 
@@ -239,6 +244,7 @@ func (q *Queries) ListOrdersByUser(ctx context.Context, userID string) ([]Order,
 			&i.StripeCustomerID,
 			&i.Status,
 			&i.AmountCents,
+			&i.Quantity,
 			&i.Currency,
 			&i.CreatedAt,
 			&i.PaidAt,
@@ -281,8 +287,8 @@ const upsertOrder = `-- name: UpsertOrder :exec
 INSERT INTO orders (
     id, user_id, plan_id, email, stripe_session_id,
     stripe_subscription_id, stripe_customer_id,
-    status, amount_cents, currency, created_at, paid_at, last_invoice_id
-) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13)
+    status, amount_cents, quantity, currency, created_at, paid_at, last_invoice_id
+) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14)
 ON CONFLICT(id) DO UPDATE SET
     user_id                = excluded.user_id,
     plan_id                = excluded.plan_id,
@@ -292,6 +298,7 @@ ON CONFLICT(id) DO UPDATE SET
     stripe_customer_id     = excluded.stripe_customer_id,
     status                 = excluded.status,
     amount_cents           = excluded.amount_cents,
+    quantity               = excluded.quantity,
     currency               = excluded.currency,
     created_at             = excluded.created_at,
     paid_at                = excluded.paid_at,
@@ -308,6 +315,7 @@ type UpsertOrderParams struct {
 	StripeCustomerID     string
 	Status               string
 	AmountCents          int32
+	Quantity             int32
 	Currency             string
 	CreatedAt            string
 	PaidAt               *string
@@ -325,6 +333,7 @@ func (q *Queries) UpsertOrder(ctx context.Context, arg UpsertOrderParams) error 
 		arg.StripeCustomerID,
 		arg.Status,
 		arg.AmountCents,
+		arg.Quantity,
 		arg.Currency,
 		arg.CreatedAt,
 		arg.PaidAt,

@@ -74,7 +74,7 @@ type Querier interface {
 	GetUserGroupByID(ctx context.Context, id string) (UserGroup, error)
 	GetUserInboundByID(ctx context.Context, id string) (UserInbound, error)
 	GetUsersByIDs(ctx context.Context, dollar_1 []string) ([]User, error)
-	IncrementPlanStockSold(ctx context.Context, id string) (pgconn.CommandTag, error)
+	IncrementPlanStockSold(ctx context.Context, arg IncrementPlanStockSoldParams) (pgconn.CommandTag, error)
 	InsertAnnouncement(ctx context.Context, arg InsertAnnouncementParams) error
 	// ─── Enroll Tokens ────────────────────────────────────────────────────────────
 	InsertEnrollToken(ctx context.Context, arg InsertEnrollTokenParams) error

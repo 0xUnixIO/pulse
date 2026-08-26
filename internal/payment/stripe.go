@@ -3,6 +3,7 @@ package payment
 import (
 	"errors"
 	"fmt"
+	"strconv"
 
 	"github.com/stripe/stripe-go/v83"
 	stripeclient "github.com/stripe/stripe-go/v83/client"
@@ -88,7 +89,7 @@ func ConstructEventAuto(payload []byte, sigHeader string, sg SettingsGetter, env
 
 // CreateCheckoutSession 用指定密钥创建 Stripe Checkout session。
 // 返回 (sessionID, checkoutURL, error)。
-func CreateCheckoutSession(secretKey string, plan plans.Plan, email string, orderID string, subToken string, successURL string, cancelURL string) (string, string, error) {
+func CreateCheckoutSession(secretKey string, plan plans.Plan, quantity int, email string, orderID string, subToken string, successURL string, cancelURL string) (string, string, error) {
 	sc := newClient(secretKey)
 
 	mode := stripe.String(string(stripe.CheckoutSessionModePayment))
@@ -104,12 +105,13 @@ func CreateCheckoutSession(secretKey string, plan plans.Plan, email string, orde
 		LineItems: []*stripe.CheckoutSessionLineItemParams{
 			{
 				Price:    stripe.String(plan.StripePriceID),
-				Quantity: stripe.Int64(1),
+				Quantity: stripe.Int64(int64(quantity)),
 			},
 		},
 	}
 	params.AddMetadata("order_id", orderID)
 	params.AddMetadata("plan_id", plan.ID)
+	params.AddMetadata("quantity", strconv.Itoa(quantity))
 	if subToken != "" {
 		params.AddMetadata("sub_token", subToken)
 	}
@@ -134,7 +136,7 @@ func ConstructEvent(payload []byte, sigHeader string, webhookSecret string) (str
 type StripePrice struct {
 	ID          string `json:"id"`
 	Nickname    string `json:"nickname"`
-	UnitAmount  int64  `json:"unit_amount"`  // 最小货币单位（如分）
+	UnitAmount  int64  `json:"unit_amount"` // 最小货币单位（如分）
 	Currency    string `json:"currency"`
 	Recurring   bool   `json:"recurring"`    // true = 订阅，false = 一次性
 	ProductName string `json:"product_name"` // 关联商品名称

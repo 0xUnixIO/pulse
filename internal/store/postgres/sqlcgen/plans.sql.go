@@ -53,12 +53,19 @@ func (q *Queries) GetPlanByID(ctx context.Context, id string) (Plan, error) {
 }
 
 const incrementPlanStockSold = `-- name: IncrementPlanStockSold :execresult
-UPDATE plans SET stock_sold = stock_sold + 1
-WHERE id = $1 AND (stock_limit = -1 OR stock_sold < stock_limit)
+UPDATE plans SET stock_sold = stock_sold + $1
+WHERE id = $2
+  AND $1 > 0
+  AND (stock_limit = -1 OR stock_sold + $1 <= stock_limit)
 `
 
-func (q *Queries) IncrementPlanStockSold(ctx context.Context, id string) (pgconn.CommandTag, error) {
-	return q.db.Exec(ctx, incrementPlanStockSold, id)
+type IncrementPlanStockSoldParams struct {
+	Quantity int32
+	PlanID   string
+}
+
+func (q *Queries) IncrementPlanStockSold(ctx context.Context, arg IncrementPlanStockSoldParams) (pgconn.CommandTag, error) {
+	return q.db.Exec(ctx, incrementPlanStockSold, arg.Quantity, arg.PlanID)
 }
 
 const listEnabledPlans = `-- name: ListEnabledPlans :many

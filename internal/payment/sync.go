@@ -99,7 +99,9 @@ func SyncSubscriptions(ctx context.Context, sg SettingsGetter, envSecretKey stri
 				newExpiry := time.Unix(periodEnd, 0).UTC()
 				jobs.WithUserLock(func() {
 					user, err := userStore.GetUser(order.UserID)
-					if err == nil && (user.ExpireAt == nil || !user.ExpireAt.Equal(newExpiry)) {
+					// 多份套餐可能已把有效期累计到 Stripe 当前账期之后；同步任务只补齐
+					// 较晚的账期结束时间，不能把已经付费获得的累计有效期缩短。
+					if err == nil && (user.ExpireAt == nil || user.ExpireAt.Before(newExpiry)) {
 						user.ExpireAt = &newExpiry
 						if _, err := userStore.UpsertUser(user); err != nil {
 							log.Printf("sync-stripe: update expiry for user %s: %v", user.ID, err)

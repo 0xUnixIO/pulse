@@ -175,6 +175,7 @@ interface Order {
   stripe_customer_id: string;
   status: string;
   amount_cents: number;
+  quantity: number;
   currency: string;
   created_at: string;
   paid_at?: string;
@@ -1038,6 +1039,7 @@ export default function PlansPage() {
                 <TableRow>
                   <TableHead className="w-[180px]">邮箱</TableHead>
                   <TableHead>状态</TableHead>
+                  <TableHead>数量</TableHead>
                   <TableHead>金额</TableHead>
                   <TableHead className="hidden md:table-cell">订阅</TableHead>
                   <TableHead className="hidden lg:table-cell">创建时间</TableHead>
@@ -1048,7 +1050,7 @@ export default function PlansPage() {
               <TableBody>
                 {ordersLoading ? (
                   <TableRow>
-                    <TableCell colSpan={7} className="py-8 text-center text-sm text-[hsl(var(--muted-foreground))]">加载中…</TableCell>
+                    <TableCell colSpan={8} className="py-8 text-center text-sm text-[hsl(var(--muted-foreground))]">加载中…</TableCell>
                   </TableRow>
                 ) : (() => {
                   const filtered = orderSearch.trim()
@@ -1060,7 +1062,7 @@ export default function PlansPage() {
                     : orders;
                   return filtered.length === 0 ? (
                     <TableRow>
-                      <TableCell colSpan={7} className="py-8 text-center text-sm text-[hsl(var(--muted-foreground))]">
+                      <TableCell colSpan={8} className="py-8 text-center text-sm text-[hsl(var(--muted-foreground))]">
                         {orderSearch ? "未找到匹配的订单" : "暂无订单"}
                       </TableCell>
                     </TableRow>
@@ -1072,6 +1074,7 @@ export default function PlansPage() {
                           {ORDER_STATUS_LABEL[order.status] ?? order.status}
                         </Badge>
                       </TableCell>
+                      <TableCell className="tabular-nums">{order.quantity || 1}</TableCell>
                       <TableCell className="font-medium tabular-nums">
                         {formatOrderAmount(order.amount_cents, order.currency)}
                       </TableCell>

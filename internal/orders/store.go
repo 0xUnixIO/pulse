@@ -25,6 +25,7 @@ type Order struct {
 	StripeCustomerID     string     `json:"stripe_customer_id"`
 	Status               string     `json:"status"`
 	AmountCents          int        `json:"amount_cents"`
+	Quantity             int        `json:"quantity"`
 	Currency             string     `json:"currency"`
 	CreatedAt            time.Time  `json:"created_at"`
 	PaidAt               *time.Time `json:"paid_at"`

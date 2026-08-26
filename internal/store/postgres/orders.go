@@ -26,6 +26,9 @@ func (s *OrderStore) UpsertOrder(order orders.Order) (orders.Order, error) {
 	if order.Currency == "" {
 		order.Currency = "usd"
 	}
+	if order.Quantity <= 0 {
+		order.Quantity = 1
+	}
 
 	err := sqlcgen.New(s.db).UpsertOrder(context.Background(), sqlcgen.UpsertOrderParams{
 		ID:                   order.ID,
@@ -37,6 +40,7 @@ func (s *OrderStore) UpsertOrder(order orders.Order) (orders.Order, error) {
 		StripeCustomerID:     order.StripeCustomerID,
 		Status:               order.Status,
 		AmountCents:          int32(order.AmountCents),
+		Quantity:             int32(order.Quantity),
 		Currency:             order.Currency,
 		CreatedAt:            order.CreatedAt.Format(time.RFC3339Nano),
 		PaidAt:               formatTimePtr(order.PaidAt),
@@ -171,6 +175,7 @@ func toOrder(r sqlcgen.Order) (orders.Order, error) {
 		StripeCustomerID:     r.StripeCustomerID,
 		Status:               r.Status,
 		AmountCents:          int(r.AmountCents),
+		Quantity:             int(r.Quantity),
 		Currency:             r.Currency,
 		LastInvoiceID:        r.LastInvoiceID,
 	}

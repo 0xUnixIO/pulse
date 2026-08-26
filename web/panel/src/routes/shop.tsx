@@ -34,6 +34,8 @@ interface Plan {
   stock_sold: number;
 }
 
+const MAX_CHECKOUT_QUANTITY = 99;
+
 /* ── Helpers ──────────────────────────────────────────────────── */
 
 function formatPrice(cents: number, currency: string): string {
@@ -95,6 +97,7 @@ export default function ShopPage({ basePath = "/shop" }: { basePath?: string }) 
   );
   const [checkoutLoading, setCheckoutLoading] = useState(false);
   const [checkoutError, setCheckoutError] = useState("");
+  const [quantity, setQuantity] = useState(1);
 
   /* ── Fetch plans ─────────────────────────────────────────────── */
 
@@ -137,9 +140,10 @@ export default function ShopPage({ basePath = "/shop" }: { basePath?: string }) 
     setCheckoutLoading(true);
 
     try {
-      const body: Record<string, string> = {
+      const body: Record<string, string | number> = {
         plan_id: selectedPlan.id,
         email,
+        quantity,
       };
       if (subToken.trim()) body.sub_token = subToken.trim();
 
@@ -174,10 +178,23 @@ export default function ShopPage({ basePath = "/shop" }: { basePath?: string }) 
 
   function openCheckout(plan: Plan) {
     setSelectedPlan(plan);
+    setQuantity(1);
     setCheckoutError("");
     setSubToken(new URLSearchParams(window.location.search).get("sub_token") ?? "");
     setDialogOpen(true);
   }
+
+  const maxQuantity = selectedPlan
+    ? Math.max(
+        1,
+        Math.min(
+          MAX_CHECKOUT_QUANTITY,
+          selectedPlan.stock_limit === -1
+            ? MAX_CHECKOUT_QUANTITY
+            : selectedPlan.stock_limit - selectedPlan.stock_sold,
+        ),
+      )
+    : 1;
 
   /* ── Render ──────────────────────────────────────────────────── */
 
@@ -348,7 +365,7 @@ export default function ShopPage({ basePath = "/shop" }: { basePath?: string }) 
               <DialogTitle>确认购买</DialogTitle>
               <DialogDescription>
                 {selectedPlan
-                  ? `${selectedPlan.name} — ${formatPrice(selectedPlan.price_cents, selectedPlan.currency)}`
+                  ? `${selectedPlan.name} — 单价 ${formatPrice(selectedPlan.price_cents, selectedPlan.currency)}`
                   : ""}
               </DialogDescription>
             </DialogHeader>
@@ -360,6 +377,61 @@ export default function ShopPage({ basePath = "/shop" }: { basePath?: string }) 
                 </div>
               )}
 
+              {selectedPlan && (
+                <div className="space-y-4">
+                  <div className="space-y-2">
+                    <label htmlFor="checkout-quantity" className="text-sm font-medium">
+                      购买数量
+                    </label>
+                    <div className="flex items-center gap-2">
+                      <Button
+                        type="button"
+                        variant="outline"
+                        size="icon"
+                        aria-label="减少数量"
+                        onClick={() => setQuantity((value) => Math.max(1, value - 1))}
+                        disabled={checkoutLoading || quantity <= 1}
+                      >
+                        −
+                      </Button>
+                      <Input
+                        id="checkout-quantity"
+                        type="number"
+                        min={1}
+                        max={maxQuantity}
+                        step={1}
+                        value={quantity}
+                        onChange={(event) => {
+                          const value = Number.parseInt(event.target.value, 10);
+                          setQuantity(Number.isNaN(value) ? 1 : Math.min(maxQuantity, Math.max(1, value)));
+                        }}
+                        disabled={checkoutLoading}
+                        className="text-center tabular-nums"
+                      />
+                      <Button
+                        type="button"
+                        variant="outline"
+                        size="icon"
+                        aria-label="增加数量"
+                        onClick={() => setQuantity((value) => Math.min(maxQuantity, value + 1))}
+                        disabled={checkoutLoading || quantity >= maxQuantity}
+                      >
+                        +
+                      </Button>
+                    </div>
+                    <p className="text-xs text-[hsl(var(--muted-foreground))]">
+                      最多可购买 {maxQuantity} 份，流量和有效期将按数量累计。
+                    </p>
+                  </div>
+
+                  <div className="flex items-center justify-between rounded-lg border border-[hsl(var(--border))] bg-[hsl(var(--muted))]/40 px-4 py-3">
+                    <span className="text-sm text-[hsl(var(--muted-foreground))]">合计</span>
+                    <span className="text-lg font-semibold tabular-nums">
+                      {formatPrice(selectedPlan.price_cents * quantity, selectedPlan.currency)}
+                    </span>
+                  </div>
+                </div>
+              )}
             </div>
 
             <DialogFooter>
@@ -371,7 +443,7 @@ export default function ShopPage({ basePath = "/shop" }: { basePath?: string }) 
               >
                 取消
               </Button>
-              <Button type="submit" disabled={checkoutLoading}>
+              <Button type="submit" disabled={checkoutLoading || !selectedPlan}>
                 {checkoutLoading ? (
                   <span className="flex items-center gap-2">
                     <span className="inline-block h-4 w-4 animate-spin rounded-full border-2 border-current border-t-transparent" />

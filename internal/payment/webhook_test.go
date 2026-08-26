@@ -1,9 +1,11 @@
 package payment
 
 import (
+	"encoding/json"
 	"testing"
 	"time"
 
+	"github.com/stripe/stripe-go/v83"
 	"pulse/internal/orders"
 	"pulse/internal/plans"
 	"pulse/internal/users"
@@ -99,7 +101,8 @@ func (s *fakeOrderStore) RevertOrderToPending(orderID string) error {
 
 // fakePlanStore 是 plans.Store 的最小内存实现，仅供本测试使用。
 type fakePlanStore struct {
-	plans map[string]plans.Plan
+	plans         map[string]plans.Plan
+	incrementedBy int
 }
 
 func newFakePlanStore() *fakePlanStore {
@@ -125,7 +128,10 @@ func (s *fakePlanStore) ListEnabledPlans() ([]plans.Plan, error) { return nil, n
 
 func (s *fakePlanStore) ListEnabledPlansByMode(mode string) ([]plans.Plan, error) { return nil, nil }
 
-func (s *fakePlanStore) IncrementStockSold(planID string) (bool, error) { return true, nil }
+func (s *fakePlanStore) IncrementStockSold(planID string, quantity int) (bool, error) {
+	s.incrementedBy += quantity
+	return true, nil
+}
 
 func (s *fakePlanStore) DeletePlan(id string) error {
 	delete(s.plans, id)
@@ -243,4 +249,77 @@ func TestRenewalTimes(t *testing.T) {
 			t.Fatalf("expire_at = %v, want %v", expireAt, want)
 		}
 	})
+}
+
+func TestScalePlanForQuantity(t *testing.T) {
+	plan := plans.Plan{TrafficLimit: 100 * 1024, DurationDays: 30}
+	scaled, err := scalePlanForQuantity(plan, 3)
+	if err != nil {
+		t.Fatalf("scalePlanForQuantity: %v", err)
+	}
+	if scaled.TrafficLimit != 300*1024 {
+		t.Fatalf("traffic limit = %d, want %d", scaled.TrafficLimit, 300*1024)
+	}
+	if scaled.DurationDays != 90 {
+		t.Fatalf("duration days = %d, want 90", scaled.DurationDays)
+	}
+	if plan.TrafficLimit != 100*1024 || plan.DurationDays != 30 {
+		t.Fatal("source plan must not be mutated")
+	}
+}
+
+func TestScalePlanForQuantityRejectsInvalidQuantity(t *testing.T) {
+	for _, quantity := range []int{0, maxCheckoutQuantity + 1} {
+		if _, err := scalePlanForQuantity(plans.Plan{}, quantity); err == nil {
+			t.Fatalf("quantity %d: expected error", quantity)
+		}
+	}
+}
+
+func TestCheckoutCompletedFulfillsSelectedQuantity(t *testing.T) {
+	orderStore := newFakeOrderStore()
+	planStore := newFakePlanStore()
+	userStore := users.NewMemoryStore()
+	planStore.plans["plan-quantity"] = plans.Plan{
+		ID:           "plan-quantity",
+		TrafficLimit: 100 * 1024,
+		DurationDays: 30,
+	}
+	_, _ = orderStore.UpsertOrder(orders.Order{
+		ID:              "order-quantity",
+		PlanID:          "plan-quantity",
+		Email:           "quantity@example.com",
+		StripeSessionID: "cs_quantity",
+		Status:          orders.StatusPending,
+		Quantity:        3,
+	})
+
+	deps := &WebhookDeps{
+		OrderStore: orderStore,
+		PlanStore:  planStore,
+		UserStore:  userStore,
+	}
+	event := stripe.Event{Data: &stripe.EventData{Raw: json.RawMessage(`{"id":"cs_quantity"}`)}}
+	deps.handleCheckoutCompleted(event)
+
+	order, err := orderStore.GetOrder("order-quantity")
+	if err != nil {
+		t.Fatalf("get fulfilled order: %v", err)
+	}
+	if order.Status != orders.StatusPaid || order.UserID == "" || order.PaidAt == nil {
+		t.Fatalf("order was not fulfilled: %+v", order)
+	}
+	user, err := userStore.GetUser(order.UserID)
+	if err != nil {
+		t.Fatalf("get provisioned user: %v", err)
+	}
+	if user.TrafficLimit != 300*1024 || user.PlanTrafficLimit != 300*1024 {
+		t.Fatalf("traffic limits = %d/%d, want %d", user.TrafficLimit, user.PlanTrafficLimit, 300*1024)
+	}
+	if user.ExpireAt == nil || !user.ExpireAt.Equal(order.PaidAt.Add(90*24*time.Hour)) {
+		t.Fatalf("expire_at = %v, want paid_at + 90 days", user.ExpireAt)
+	}
+	if planStore.incrementedBy != 3 {
+		t.Fatalf("stock increment = %d, want 3", planStore.incrementedBy)
+	}
 }

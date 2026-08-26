@@ -22,7 +22,7 @@ type Plan struct {
 	UserGroupIDs           string    `json:"user_group_ids"` // 逗号分隔的用户组 ID
 	SortOrder              int       `json:"sort_order"`
 	Enabled                bool      `json:"enabled"`
-	Mode                   string    `json:"mode"` // "live" | "test"，默认 "live"
+	Mode                   string    `json:"mode"`        // "live" | "test"，默认 "live"
 	StockLimit             int       `json:"stock_limit"` // -1 = 无限制
 	StockSold              int       `json:"stock_sold"`  // 已售数量，只增不减
 	CreatedAt              time.Time `json:"created_at"`
@@ -41,8 +41,8 @@ type Store interface {
 	ListEnabledPlans() ([]Plan, error)
 	// ListEnabledPlansByMode 返回指定环境（"live"/"test"）下已启用的套餐，供商店端点使用。
 	ListEnabledPlansByMode(mode string) ([]Plan, error)
-	// IncrementStockSold 原子地将套餐的 stock_sold +1，仅在库存充足时执行。
-	// 返回 false 表示库存已耗尽（stock_limit != -1 && stock_sold >= stock_limit）。
-	IncrementStockSold(planID string) (ok bool, err error)
+	// IncrementStockSold 原子地将套餐的 stock_sold 增加 quantity，仅在库存充足时执行。
+	// 返回 false 表示剩余库存不足以满足本次购买。
+	IncrementStockSold(planID string, quantity int) (ok bool, err error)
 	DeletePlan(id string) error
 }

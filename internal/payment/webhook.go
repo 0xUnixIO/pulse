@@ -118,10 +118,19 @@ func (d *WebhookDeps) handleCheckoutCompleted(event stripe.Event) {
 		}
 		return
 	}
+	quantity := normalizedOrderQuantity(order.Quantity)
+	fulfillmentPlan, err := scalePlanForQuantity(plan, quantity)
+	if err != nil {
+		log.Printf("payment: scale plan %s by quantity %d: %v", order.PlanID, quantity, err)
+		if revErr := d.OrderStore.RevertOrderToPending(order.ID); revErr != nil {
+			log.Printf("payment: revert order %s after quantity error: %v", order.ID, revErr)
+		}
+		return
+	}
 
 	if order.UserID == "" {
 		// 新用户：从 shop 购买
-		if err := d.provisionNewUser(&order, plan, now); err != nil {
+		if err := d.provisionNewUser(&order, fulfillmentPlan, now); err != nil {
 			log.Printf("payment: provision user for order %s: %v", order.ID, err)
 			if revErr := d.OrderStore.RevertOrderToPending(order.ID); revErr != nil {
 				log.Printf("payment: revert order %s after provision error: %v", order.ID, revErr)
@@ -130,7 +139,7 @@ func (d *WebhookDeps) handleCheckoutCompleted(event stripe.Event) {
 		}
 	} else {
 		// 已有用户续费
-		if err := d.renewExistingUser(order, plan, now); err != nil {
+		if err := d.renewExistingUser(order, fulfillmentPlan, now); err != nil {
 			log.Printf("payment: renew user for order %s: %v", order.ID, err)
 			if revErr := d.OrderStore.RevertOrderToPending(order.ID); revErr != nil {
 				log.Printf("payment: revert order %s after renew error: %v", order.ID, revErr)
@@ -145,10 +154,10 @@ func (d *WebhookDeps) handleCheckoutCompleted(event stripe.Event) {
 	}
 
 	// 原子递增库存（超卖时只打日志，不回滚已完成的付款）
-	if ok, err := d.PlanStore.IncrementStockSold(order.PlanID); err != nil {
+	if ok, err := d.PlanStore.IncrementStockSold(order.PlanID, quantity); err != nil {
 		log.Printf("payment: increment stock for plan %s: %v", order.PlanID, err)
 	} else if !ok {
-		log.Printf("payment: plan %s stock exhausted after checkout (oversell by 1)", order.PlanID)
+		log.Printf("payment: plan %s stock exhausted after checkout (could not record %d sold units)", order.PlanID, quantity)
 	}
 }
 
@@ -330,6 +339,15 @@ func (d *WebhookDeps) handleInvoicePaid(event stripe.Event) {
 	plan, err := d.PlanStore.GetPlan(order.PlanID)
 	if err != nil {
 		log.Printf("payment: get plan %s for invoice: %v", order.PlanID, err)
+		if claimedInvoice != "" {
+			_ = d.OrderStore.UnclaimInvoice(order.ID, claimedInvoice)
+		}
+		return
+	}
+	quantity := normalizedOrderQuantity(order.Quantity)
+	plan, err = scalePlanForQuantity(plan, quantity)
+	if err != nil {
+		log.Printf("payment: scale plan %s by quantity %d for invoice: %v", order.PlanID, quantity, err)
 		if claimedInvoice != "" {
 			_ = d.OrderStore.UnclaimInvoice(order.ID, claimedInvoice)
 		}

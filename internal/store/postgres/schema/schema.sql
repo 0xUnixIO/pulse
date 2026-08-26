@@ -257,6 +257,7 @@ CREATE TABLE IF NOT EXISTS orders (
     stripe_customer_id     TEXT NOT NULL DEFAULT '',
     status                 TEXT NOT NULL DEFAULT 'pending',
     amount_cents           INTEGER NOT NULL DEFAULT 0,
+    quantity               INTEGER NOT NULL DEFAULT 1,
     currency               TEXT NOT NULL DEFAULT 'usd',
     created_at             TEXT NOT NULL,
     paid_at                TEXT,

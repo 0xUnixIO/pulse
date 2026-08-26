@@ -90,8 +90,11 @@ func (s *PlanStore) ListEnabledPlansByMode(mode string) ([]plans.Plan, error) {
 	return toPlans(rows)
 }
 
-func (s *PlanStore) IncrementStockSold(planID string) (bool, error) {
-	result, err := sqlcgen.New(s.db).IncrementPlanStockSold(context.Background(), planID)
+func (s *PlanStore) IncrementStockSold(planID string, quantity int) (bool, error) {
+	result, err := sqlcgen.New(s.db).IncrementPlanStockSold(context.Background(), sqlcgen.IncrementPlanStockSoldParams{
+		Quantity: int32(quantity),
+		PlanID:   planID,
+	})
 	if err != nil {
 		return false, fmt.Errorf("increment stock sold: %w", err)
 	}

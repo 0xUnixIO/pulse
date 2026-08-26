@@ -177,6 +177,7 @@ type Order struct {
 	StripeCustomerID     string
 	Status               string
 	AmountCents          int32
+	Quantity             int32
 	Currency             string
 	CreatedAt            string
 	PaidAt               *string

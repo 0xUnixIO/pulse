@@ -5,6 +5,7 @@ import (
 	"log"
 	"net"
 	"net/http"
+	"strconv"
 	"strings"
 	"sync"
 	"time"
@@ -89,8 +90,8 @@ type ShopAPI struct {
 	UserStore       users.Store
 	Deps            *WebhookDeps
 	Settings        SettingsGetter
-	EnvSecretKey    string // 环境变量回退密钥
-	BaseURL         string // fallback，仅当 Settings 未配置 shop_base_url 时使用
+	EnvSecretKey    string         // 环境变量回退密钥
+	BaseURL         string         // fallback，仅当 Settings 未配置 shop_base_url 时使用
 	AdminAuth       TokenValidator // 非 nil 时 /shop-test/* 需要 admin token
 	checkoutLimiter *checkoutRateLimiter
 }
@@ -150,6 +151,7 @@ func (s *ShopAPI) createCheckoutHandler(mode, shopPath string) http.HandlerFunc 
 		}
 
 		var planID, email, subToken string
+		quantity := 1
 
 		ct := r.Header.Get("Content-Type")
 		if strings.Contains(ct, "application/json") {
@@ -157,6 +159,7 @@ func (s *ShopAPI) createCheckoutHandler(mode, shopPath string) http.HandlerFunc 
 				PlanID   string `json:"plan_id"`
 				Email    string `json:"email"`
 				SubToken string `json:"sub_token"`
+				Quantity *int   `json:"quantity"`
 			}
 			if err := json.NewDecoder(r.Body).Decode(&body); err != nil {
 				writeJSONError(w, http.StatusBadRequest, "invalid json")
@@ -165,6 +168,9 @@ func (s *ShopAPI) createCheckoutHandler(mode, shopPath string) http.HandlerFunc 
 			planID = body.PlanID
 			email = body.Email
 			subToken = body.SubToken
+			if body.Quantity != nil {
+				quantity = *body.Quantity
+			}
 		} else {
 			if err := r.ParseForm(); err != nil {
 				writeJSONError(w, http.StatusBadRequest, "invalid form data")
@@ -173,6 +179,14 @@ func (s *ShopAPI) createCheckoutHandler(mode, shopPath string) http.HandlerFunc 
 			planID = r.FormValue("plan_id")
 			email = r.FormValue("email")
 			subToken = r.FormValue("sub_token")
+			if rawQuantity := r.FormValue("quantity"); rawQuantity != "" {
+				parsed, err := strconv.Atoi(rawQuantity)
+				if err != nil {
+					writeJSONError(w, http.StatusBadRequest, "quantity must be an integer")
+					return
+				}
+				quantity = parsed
+			}
 		}
 
 		if planID == "" || email == "" {
@@ -181,6 +195,10 @@ func (s *ShopAPI) createCheckoutHandler(mode, shopPath string) http.HandlerFunc 
 		}
 		if !isValidEmail(email) {
 			writeJSONError(w, http.StatusBadRequest, "invalid email format")
+			return
+		}
+		if quantity < 1 || quantity > maxCheckoutQuantity {
+			writeJSONError(w, http.StatusBadRequest, "quantity must be between 1 and "+strconv.Itoa(maxCheckoutQuantity))
 			return
 		}
 
@@ -193,12 +211,30 @@ func (s *ShopAPI) createCheckoutHandler(mode, shopPath string) http.HandlerFunc 
 			writeJSONError(w, http.StatusBadRequest, "plan is not available")
 			return
 		}
-		if plan.StockLimit != -1 && plan.StockSold >= plan.StockLimit {
-			writeJSONError(w, http.StatusConflict, "该套餐库存已售罄")
-			return
+		if plan.StockLimit != -1 {
+			remaining := plan.StockLimit - plan.StockSold
+			if remaining <= 0 {
+				writeJSONError(w, http.StatusConflict, "该套餐库存已售罄")
+				return
+			}
+			if quantity > remaining {
+				writeJSONError(w, http.StatusConflict, "库存不足，当前仅剩 "+strconv.Itoa(remaining)+" 份")
+				return
+			}
 		}
 		if plan.StripePriceID == "" {
 			writeJSONError(w, http.StatusBadRequest, "plan has no Stripe price configured")
+			return
+		}
+		if _, err := scalePlanForQuantity(plan, quantity); err != nil {
+			writeJSONError(w, http.StatusBadRequest, err.Error())
+			return
+		}
+
+		amountCents := int64(plan.PriceCents) * int64(quantity)
+		const maxOrderAmountCents = int64(1<<31 - 1)
+		if amountCents < 0 || amountCents > maxOrderAmountCents {
+			writeJSONError(w, http.StatusBadRequest, "order amount is out of range")
 			return
 		}
 
@@ -218,7 +254,8 @@ func (s *ShopAPI) createCheckoutHandler(mode, shopPath string) http.HandlerFunc 
 			PlanID:      plan.ID,
 			Email:       email,
 			Status:      orders.StatusPending,
-			AmountCents: plan.PriceCents,
+			AmountCents: int(amountCents),
+			Quantity:    quantity,
 			Currency:    plan.Currency,
 		}
 
@@ -239,7 +276,7 @@ func (s *ShopAPI) createCheckoutHandler(mode, shopPath string) http.HandlerFunc 
 		successURL := baseURL + shopPath + "/success?session_id={CHECKOUT_SESSION_ID}"
 		cancelURL := baseURL + shopPath
 
-		sessionID, checkoutURL, err := CreateCheckoutSession(secretKey, plan, email, orderID, subToken, successURL, cancelURL)
+		sessionID, checkoutURL, err := CreateCheckoutSession(secretKey, plan, quantity, email, orderID, subToken, successURL, cancelURL)
 		if err != nil {
 			log.Printf("payment: create checkout session: %v", err)
 			writeJSONError(w, http.StatusUnprocessableEntity, err.Error())

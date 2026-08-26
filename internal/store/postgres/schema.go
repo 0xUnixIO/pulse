@@ -241,6 +241,7 @@ var schemaMigrations = []migration{
 				stripe_customer_id     TEXT NOT NULL DEFAULT '',
 				status                 TEXT NOT NULL DEFAULT 'pending',
 				amount_cents           INTEGER NOT NULL DEFAULT 0,
+				quantity               INTEGER NOT NULL DEFAULT 1,
 				currency               TEXT NOT NULL DEFAULT 'usd',
 				created_at             TEXT NOT NULL,
 				paid_at                TEXT,
@@ -416,6 +417,13 @@ var schemaMigrations = []migration{
 		stmts: []string{
 			`ALTER TABLE user_node_daily_usage ADD COLUMN IF NOT EXISTS raw_upload_bytes BIGINT NOT NULL DEFAULT 0`,
 			`ALTER TABLE user_node_daily_usage ADD COLUMN IF NOT EXISTS raw_download_bytes BIGINT NOT NULL DEFAULT 0`,
+		},
+	},
+	{
+		version: 5,
+		label:   "orders.quantity (订单购买数量)",
+		stmts: []string{
+			`ALTER TABLE orders ADD COLUMN IF NOT EXISTS quantity INTEGER NOT NULL DEFAULT 1`,
 		},
 	},
 }
