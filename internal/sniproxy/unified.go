@@ -3,7 +3,9 @@ package sniproxy
 import (
 	"context"
 	"crypto/tls"
+	"errors"
 	"fmt"
+	"io"
 	"log"
 	"net"
 	"net/http"
@@ -177,6 +179,9 @@ func (p *UnifiedProxy) handle(conn net.Conn) {
 	// 先 peek SNI（会消耗 ClientHello 字节，需要后面回放或重新握手）
 	sni, peeked, err := PeekSNI(conn)
 	if err != nil {
+		if !isBenignPeekErr(err) {
+			log.Printf("sniproxy: peek sni=%q: %v", sni, err)
+		}
 		return
 	}
 
@@ -186,6 +191,7 @@ func (p *UnifiedProxy) handle(conn net.Conn) {
 	}
 	route, ok := (*routes)[sni]
 	if !ok {
+		log.Printf("sniproxy: unknown sni=%s", sni)
 		return
 	}
 	_ = conn.SetReadDeadline(time.Time{})
@@ -218,6 +224,7 @@ func (p *UnifiedProxy) handle(conn net.Conn) {
 		tlsConn := tls.Server(prefixed, tlsCfg)
 		_ = tlsConn.SetDeadline(time.Now().Add(hsTimeout))
 		if err := tlsConn.Handshake(); err != nil {
+			log.Printf("sniproxy: handshake sni=%s: %v", sni, err)
 			return
 		}
 		_ = tlsConn.SetDeadline(time.Time{})
@@ -239,12 +246,26 @@ func (p *UnifiedProxy) handle(conn net.Conn) {
 		tlsConn := tls.Server(prefixed, tlsCfg)
 		_ = tlsConn.SetDeadline(time.Now().Add(hsTimeout))
 		if err := tlsConn.Handshake(); err != nil {
+			log.Printf("sniproxy: handshake sni=%s: %v", sni, err)
 			return
 		}
 		_ = tlsConn.SetDeadline(time.Time{})
 
 		handleHTTPReverse(tlsConn, route.Backend, sni)
 	}
+}
+
+// isBenignPeekErr 空连接、超时、明文扫描不打日志，避免 443 被扫时刷屏。
+// ClientHello 解析失败、无 SNI 必须留下，才能分清测延迟失败是包没到还是 Hello 坏了。
+func isBenignPeekErr(err error) bool {
+	if err == nil {
+		return true
+	}
+	if errors.Is(err, io.EOF) || errors.Is(err, io.ErrUnexpectedEOF) || errors.Is(err, ErrNotTLS) {
+		return true
+	}
+	var ne net.Error
+	return errors.As(err, &ne) && ne.Timeout()
 }
 
 // handleHTTPReverse 用 httputil.ReverseProxy 在已握好的 TLS 连接上服务 HTTP，
@@ -348,4 +369,3 @@ func (c *prefixedConn) Read(b []byte) (int, error) {
 	}
 	return c.Conn.Read(b)
 }
-

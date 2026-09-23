@@ -1,10 +1,13 @@
 package sniproxy
 
 import (
+	"bytes"
 	"context"
 	"crypto/tls"
 	"io"
+	"log"
 	"net"
+	"strings"
 	"sync"
 	"testing"
 	"time"
@@ -160,5 +163,62 @@ func TestUnified_HotReloadSwitchesMode(t *testing.T) {
 	}
 	if string(got) != "hi" {
 		t.Errorf("got %q, want 'hi'", got)
+	}
+}
+
+func TestIsBenignPeekErr(t *testing.T) {
+	if !isBenignPeekErr(io.EOF) {
+		t.Fatal("EOF 应视为空连接，不打日志")
+	}
+	if !isBenignPeekErr(ErrNotTLS) {
+		t.Fatal("非 TLS（扫描）不应刷屏")
+	}
+	if isBenignPeekErr(ErrNoSNI) {
+		t.Fatal("ClientHello 无 SNI 必须打日志")
+	}
+}
+
+// TestUnified_UnknownSNILogs 复现：未命中路由表的 SNI 以前静默断开，
+// 测延迟失败时 journal 里看不到原因。必须打出 sni。
+func TestUnified_UnknownSNILogs(t *testing.T) {
+	var buf bytes.Buffer
+	old := log.Writer()
+	log.SetOutput(&buf)
+	t.Cleanup(func() { log.SetOutput(old) })
+
+	backend := startEchoPlaintext(t)
+	cert := genSelfSigned(t)
+	proxy := &UnifiedProxy{Addr: "127.0.0.1:0"}
+	proxy.SetTLSConfig(&tls.Config{Certificates: []tls.Certificate{cert}})
+	proxy.SetRoutes([]Route{
+		{SNI: "term.example.com", Backend: backend, Mode: ModeTerminating},
+	})
+
+	ln, _ := net.Listen("tcp", "127.0.0.1:0")
+	addr := ln.Addr().String()
+	_ = ln.Close()
+	proxy.Addr = addr
+
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	var wg sync.WaitGroup
+	wg.Add(1)
+	go func() { defer wg.Done(); _ = proxy.Serve(ctx) }()
+	t.Cleanup(func() { cancel(); wg.Wait() })
+	waitForListen(t, addr)
+
+	conn, err := net.Dial("tcp", addr)
+	if err != nil {
+		t.Fatal(err)
+	}
+	tc := tls.Client(conn, &tls.Config{ServerName: "unknown.example.com", InsecureSkipVerify: true})
+	_ = tc.SetDeadline(time.Now().Add(2 * time.Second))
+	_ = tc.Handshake()
+	_ = conn.Close()
+	time.Sleep(50 * time.Millisecond)
+
+	got := buf.String()
+	if !strings.Contains(got, "unknown sni=unknown.example.com") {
+		t.Fatalf("未知 SNI 未打日志: %q", got)
 	}
 }
