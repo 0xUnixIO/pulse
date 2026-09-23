@@ -13,7 +13,8 @@ import (
 
 // fakeOrderStore 是 orders.Store 的最小内存实现，仅供本测试使用。
 type fakeOrderStore struct {
-	orders map[string]orders.Order
+	orders    map[string]orders.Order
+	upsertErr error
 }
 
 func newFakeOrderStore() *fakeOrderStore {
@@ -22,6 +23,9 @@ func newFakeOrderStore() *fakeOrderStore {
 
 func (s *fakeOrderStore) UpsertOrder(o orders.Order) (orders.Order, error) {
 	s.orders[o.ID] = o
+	if s.upsertErr != nil {
+		return orders.Order{}, s.upsertErr
+	}
 	return o, nil
 }
 

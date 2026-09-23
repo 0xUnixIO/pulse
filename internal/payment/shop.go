@@ -25,6 +25,47 @@ func isValidEmail(email string) bool {
 	return at > 0 && at < len(email)-1
 }
 
+// checkoutEmailForUser 为已有用户选择稳定的 Stripe/订单邮箱。
+// 优先保留真实邮箱；历史随机占位邮箱则改为由用户名生成的确定性地址。
+func checkoutEmailForUser(user users.User) string {
+	storedEmail := strings.TrimSpace(user.Email)
+	if isValidEmail(storedEmail) && !strings.HasSuffix(strings.ToLower(storedEmail), "@noreply.local") {
+		return storedEmail
+	}
+
+	username := strings.TrimSpace(user.Username)
+	if isValidEmail(username) {
+		return username
+	}
+
+	localPart := sanitizeEmailLocalPart(username)
+	if localPart == "" {
+		localPart = sanitizeEmailLocalPart(user.ID)
+	}
+	if localPart == "" {
+		localPart = "user"
+	}
+	return localPart + "@noreply.local"
+}
+
+func sanitizeEmailLocalPart(value string) string {
+	var b strings.Builder
+	for _, r := range strings.TrimSpace(value) {
+		if b.Len() >= 48 {
+			break
+		}
+		if (r >= 'a' && r <= 'z') || (r >= 'A' && r <= 'Z') ||
+			(r >= '0' && r <= '9') || r == '.' || r == '_' || r == '-' {
+			b.WriteRune(r)
+			continue
+		}
+		if b.Len() > 0 && b.String()[b.Len()-1] != '-' {
+			b.WriteByte('-')
+		}
+	}
+	return strings.Trim(b.String(), ".-_")
+}
+
 // checkoutRateLimiter 基于 IP 的滑动窗口限流器，用于 /shop/checkout。
 type checkoutRateLimiter struct {
 	mu       sync.Mutex
@@ -245,6 +286,7 @@ func (s *ShopAPI) createCheckoutHandler(mode, shopPath string) http.HandlerFunc 
 			user, err := s.UserStore.GetUserBySubToken(subToken)
 			if err == nil {
 				userID = user.ID
+				email = checkoutEmailForUser(user)
 			}
 		}
 

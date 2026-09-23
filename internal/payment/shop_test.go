@@ -1,6 +1,7 @@
 package payment
 
 import (
+	"errors"
 	"net/http"
 	"net/http/httptest"
 	"strconv"
@@ -73,5 +74,58 @@ func TestCheckoutRejectsQuantityAboveRemainingStock(t *testing.T) {
 	}
 	if len(orderStore.orders) != 0 {
 		t.Fatal("out-of-stock checkout must not create an order")
+	}
+}
+
+func TestCheckoutUsesUsernameForExistingUserPlaceholderEmail(t *testing.T) {
+	planStore := newFakePlanStore()
+	planStore.plans["plan-renew"] = plans.Plan{
+		ID:            "plan-renew",
+		Enabled:       true,
+		StripePriceID: "price_test",
+		PriceCents:    500,
+		StockLimit:    -1,
+	}
+	orderStore := newFakeOrderStore()
+	// 在创建 Stripe Session 前停止请求，便于断言已写入的订单内容。
+	orderStore.upsertErr = errors.New("stop before Stripe")
+	userStore := users.NewMemoryStore()
+	_, err := userStore.UpsertUser(users.User{
+		ID:       "user-existing",
+		Username: "alice",
+		SubToken: "token-existing",
+		Email:    "user-oldrandom@noreply.local",
+	})
+	if err != nil {
+		t.Fatalf("create existing user: %v", err)
+	}
+	api := newTestShopAPI(planStore, orderStore)
+	api.UserStore = userStore
+
+	rec := performCheckoutRequest(
+		t,
+		api,
+		`{"plan_id":"plan-renew","email":"user-newrandom@noreply.local","sub_token":"token-existing"}`,
+	)
+	if rec.Code != http.StatusUnprocessableEntity {
+		t.Fatalf("status = %d, want %d; body=%s", rec.Code, http.StatusUnprocessableEntity, rec.Body.String())
+	}
+	if len(orderStore.orders) != 1 {
+		t.Fatalf("orders = %d, want 1", len(orderStore.orders))
+	}
+	for _, order := range orderStore.orders {
+		if order.UserID != "user-existing" {
+			t.Fatalf("user_id = %q, want user-existing", order.UserID)
+		}
+		if order.Email != "alice@noreply.local" {
+			t.Fatalf("email = %q, want alice@noreply.local", order.Email)
+		}
+	}
+}
+
+func TestCheckoutEmailForUserKeepsRealEmail(t *testing.T) {
+	email := checkoutEmailForUser(users.User{Username: "alice", Email: "alice@example.com"})
+	if email != "alice@example.com" {
+		t.Fatalf("email = %q, want alice@example.com", email)
 	}
 }
