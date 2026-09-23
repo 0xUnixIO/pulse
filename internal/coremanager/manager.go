@@ -58,13 +58,13 @@ type AccessLogEntry struct {
 	SourceIP    string    `json:"source_ip"`
 	SourcePort  string    `json:"source_port"`
 	Destination string    `json:"destination"`
-	RemoteIP    string    `json:"remote_ip"`   // 目标真实 IP（DNS 解析后）
+	RemoteIP    string    `json:"remote_ip"` // 目标真实 IP（DNS 解析后）
 	RouteTag    string    `json:"route_tag"`
-	Protocol    string    `json:"protocol"`    // vless / trojan / ss2022 / anytls
+	Protocol    string    `json:"protocol"` // vless / trojan / ss2022 / anytls
 	User        string    `json:"user"`
 	InboundTag  string    `json:"inbound_tag"`
 	Time        time.Time `json:"time"`
-	SessionID   string    `json:"-"`           // 内部关联用，不序列化
+	SessionID   string    `json:"-"` // 内部关联用，不序列化
 }
 
 // AccessLogDrainer 可选接口：支持批量取走 access log 缓冲区。
@@ -78,6 +78,9 @@ type Manager interface {
 	Start(config string) error
 	Stop() error
 	Restart(config string) error
+	// Recycle 用当前配置做一次优雅重载，即使配置字节未变。
+	// 存量连接留在旧实例上自然结束。用于落地 SS 出口粘死后自愈。
+	Recycle() error
 	Status() Status
 	Usage(reset bool) UsageStats
 	Config() string

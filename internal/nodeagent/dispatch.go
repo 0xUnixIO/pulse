@@ -108,6 +108,12 @@ func (d *APIDispatcher) Handle(ctx context.Context, method string, body json.Raw
 			return nil, err
 		}
 		return marshal(st)
+	case "Recycle":
+		st, err := d.api.DoRecycle()
+		if err != nil {
+			return nil, err
+		}
+		return marshal(st)
 
 	// ── 用户增删 ──
 	case "AddUser":
@@ -290,9 +296,9 @@ func (d *APIDispatcher) handleTracerouteStream(ctx context.Context, req nodes.Tr
 // ── ConfigHasher ─────────────────────────────────────────────────
 
 // ConfigHasher 返回一个函数，给 DefaultHelloProvider 使用。
-// hash 由当前 xray 配置中的"用户列表 + inbound 倍率"规范化后 SHA256 得到，
-// 仅在影响下发的关键字段变化时改变（用户增删、UUID/secret 变化、启用状态变化、
-// inbound 倍率变化），server 端可据此判断是否需要重下发配置。
+// hash 由当前 xray 配置中的用户列表 + inbound tag 规范化后 SHA256 得到，
+// 仅在影响下发的关键字段变化时改变（用户增删、UUID/secret 变化、启用状态变化）。
+// 倍率不进 hash（proxycfg 不写入 xray JSON）。server 端可据此判断是否需要重下发。
 //
 // 算法实现位于 internal/nodes/confighash 共享包，与 server 侧保持字节一致。
 func ConfigHasher(api *nodeapi.API) func() string {

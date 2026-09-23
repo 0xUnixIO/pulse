@@ -43,6 +43,7 @@ var methodPaths = map[string]string{
 	"Start":       "/v1/node/runtime/start",
 	"Stop":        "/v1/node/runtime/stop",
 	"Restart":     "/v1/node/runtime/restart",
+	"Recycle":     "/v1/node/runtime/recycle",
 	"AddUser":     "/v1/node/runtime/users/add",
 	"RemoveUser":  "/v1/node/runtime/users/remove",
 	"KickUser":    "/v1/node/runtime/users/kick",

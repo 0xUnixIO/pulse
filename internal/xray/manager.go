@@ -74,10 +74,17 @@ const maxAccessLogBuf = 5000
 // ErrNotRunning xray 未运行时的错误，满足 errors.Is(err, coremanager.ErrNotRunning)。
 var ErrNotRunning = fmt.Errorf("xray is not running: %w", coremanager.ErrNotRunning)
 
+// replacedInstanceDrain 是优雅重载后旧实例还能活多久。
+// Close 不取消连接。不设期限的话，对端一直抖时每轮 Recycle 都会留下一个不会自己结束的 core。
+const replacedInstanceDrain = 2 * time.Minute
+
 // Manager 管理 xray-core in-process 实例的启停及流量采集。
 type Manager struct {
-	mu      sync.Mutex
-	resetMu sync.Mutex // 序列化 Usage(reset=true) 调用，防止并发竞争
+	// lifecycleMu 把 Start/Stop/Restart/Recycle 串成单飞。
+	// 这些操作在锁外创建实例，节点 RPC 和 watchdog 又各在自己的 goroutine 里。
+	lifecycleMu sync.Mutex
+	mu          sync.Mutex
+	resetMu     sync.Mutex // 序列化 Usage(reset=true) 调用，防止并发竞争
 	// xray-core in-process 实例（替代原来的 *exec.Cmd）
 	instance  *xrayCore.Instance
 	startedAt time.Time
@@ -124,6 +131,14 @@ type Manager struct {
 	netRxBaseline int64
 	netTxBaseline int64
 	netStatsReady bool
+
+	// SS 落地出口拨号失败窗口，用于配置未变时强制 Recycle。
+	ssFailAt      []time.Time
+	lastRecycleAt time.Time
+	recycleQueued bool
+
+	// replacedDrain 非零时覆盖 replacedInstanceDrain，只给测试缩短排空时间。
+	replacedDrain time.Duration
 }
 
 // NewManager 创建 Manager。
@@ -164,6 +179,12 @@ func (m *Manager) Config() string {
 // Start 以 in-process 方式启动 xray-core 实例。
 // config 为 xray JSON 配置字符串；in-process 不需要外部 gRPC 端口，api.listen 可忽略。
 func (m *Manager) Start(config string) error {
+	m.lifecycleMu.Lock()
+	defer m.lifecycleMu.Unlock()
+	return m.startLocked(config)
+}
+
+func (m *Manager) startLocked(config string) error {
 	m.mu.Lock()
 	if m.instance != nil {
 		m.mu.Unlock()
@@ -228,6 +249,8 @@ func (m *Manager) Start(config string) error {
 
 // Stop 停止 xray-core in-process 实例及 AnyTLS 入站服务，并断开所有存量连接。
 func (m *Manager) Stop() error {
+	m.lifecycleMu.Lock()
+	defer m.lifecycleMu.Unlock()
 	return m.stop(true)
 }
 
@@ -243,6 +266,10 @@ func (m *Manager) stop(dropConns bool) error {
 	if instance == nil {
 		m.mu.Unlock()
 		return ErrNotRunning
+	}
+	drain := replacedInstanceDrain
+	if m.replacedDrain > 0 {
+		drain = m.replacedDrain
 	}
 	// 立即清除引用，防止并发操作
 	m.instance = nil
@@ -272,16 +299,22 @@ func (m *Manager) stop(dropConns bool) error {
 
 	// instance.Close() 只关闭 listener 与各 feature，已建立的连接仍在各自
 	// goroutine 里收发；取消实例根 ctx 才能真正断链。
-	if dropConns && instanceCancel != nil {
-		instanceCancel()
+	// 优雅重载先留一段排空时间，到期再取消，避免旧 core 按 Recycle 周期堆积。
+	if instanceCancel != nil {
+		if dropConns {
+			instanceCancel()
+		} else {
+			time.AfterFunc(drain, instanceCancel)
+		}
 	}
 
 	if closeErr != nil {
 		return fmt.Errorf("close xray instance: %w", closeErr)
 	}
 
-	// 显式停止时清除持久化配置，避免下次进程启动时自动恢复
-	if configFile != "" {
+	// 只有显式 Stop 删除磁盘配置。优雅重载若在 Start 前删掉，
+	// Start 失败后进程重启就没有配置可恢复。
+	if dropConns && configFile != "" {
 		_ = os.Remove(configFile)
 	}
 
@@ -290,21 +323,67 @@ func (m *Manager) stop(dropConns bool) error {
 
 // Restart 重启 xray。若配置未变化则跳过。
 //
-// 走优雅重载：存量连接留在旧实例上自然结束，不因一次配置下发把在线用户全断掉。
+// 走优雅重载：存量连接先留在旧实例上，排空期限后再取消，避免一次下发把在线用户立刻全断掉。
 // 需要立即切断某个用户的流量时用 KickUser，它精确到用户、不波及他人。
+// 配置未变但核心内部出口已粘死时用 Recycle，不要指望再下发同一份 JSON。
 func (m *Manager) Restart(config string) error {
+	m.lifecycleMu.Lock()
+	defer m.lifecycleMu.Unlock()
+	return m.restartLocked(config, false)
+}
+
+// Recycle 用当前配置优雅重载，即使 lastConfig 完全相同。
+// 对端（如住宅落地）抖动后 SS 出口半开连接会粘死，而 config hash 仍匹配，
+// Restart / selfsync / reconcile 都会当成「已同步」跳过。这里强制换实例。
+// 未运行时直接返回，不能用残留的 lastConfig 把已 Stop 的核心再拉起来。
+func (m *Manager) Recycle() error {
+	m.lifecycleMu.Lock()
+	defer m.lifecycleMu.Unlock()
 	m.mu.Lock()
-	unchanged := m.instance != nil && config == m.lastConfig
+	running := m.instance != nil
+	cfg := m.lastConfig
+	m.mu.Unlock()
+	if !running {
+		return ErrNotRunning
+	}
+	if cfg == "" {
+		return errors.New("xray recycle: no saved config")
+	}
+	if err := m.restartLocked(cfg, true); err != nil {
+		return err
+	}
+	m.mu.Lock()
+	m.lastRecycleAt = time.Now()
+	m.ssFailAt = nil
+	m.mu.Unlock()
+	return nil
+}
+
+func (m *Manager) restartLocked(config string, force bool) error {
+	m.mu.Lock()
+	unchanged := !force && m.instance != nil && config == m.lastConfig
 	m.mu.Unlock()
 
 	if unchanged {
 		return nil
 	}
 
+	// 先解析。解析失败就不要停掉还在服务的实例。
+	if err := parseXrayConfig(config); err != nil {
+		return err
+	}
 	if err := m.stop(false); err != nil && !errors.Is(err, ErrNotRunning) {
 		return err
 	}
-	return m.Start(config)
+	return m.startLocked(config)
+}
+
+func parseXrayConfig(config string) error {
+	cleaned := stripAPIListen(config)
+	if _, err := serial.LoadJSONConfig(bytes.NewReader([]byte(cleaned))); err != nil {
+		return fmt.Errorf("parse xray config: %w", err)
+	}
+	return nil
 }
 
 // Status 返回 xray 运行状态。
@@ -592,6 +671,9 @@ func (m *Manager) appendLogLocked(line string) {
 	}
 	// 解析日志行，实时维护活跃会话 map
 	m.parseSessionLog(line)
+	if isSSOutboundDialFail(line) && m.noteSSDialFailLocked(time.Now()) {
+		go m.recycleFromWatchdog()
+	}
 }
 
 // parseSessionLog 从单条日志行更新活跃会话状态。

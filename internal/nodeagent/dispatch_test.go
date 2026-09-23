@@ -19,20 +19,21 @@ type stubManager struct {
 	cfg string
 }
 
-func (s *stubManager) Start(c string) error               { s.cfg = c; return nil }
-func (s *stubManager) Stop() error                        { return nil }
-func (s *stubManager) Restart(c string) error             { s.cfg = c; return nil }
-func (s *stubManager) Status() coremanager.Status         { return coremanager.Status{} }
-func (s *stubManager) Usage(bool) coremanager.UsageStats  { return coremanager.UsageStats{} }
-func (s *stubManager) Config() string                     { return s.cfg }
-func (s *stubManager) Logs() []string                     { return nil }
-func (s *stubManager) Subscribe() (int64, <-chan string)  { return 0, make(chan string) }
-func (s *stubManager) Unsubscribe(int64)                  {}
-func (s *stubManager) SavedConfig() string                { return s.cfg }
+func (s *stubManager) Start(c string) error              { s.cfg = c; return nil }
+func (s *stubManager) Stop() error                       { return nil }
+func (s *stubManager) Restart(c string) error            { s.cfg = c; return nil }
+func (s *stubManager) Recycle() error                    { return nil }
+func (s *stubManager) Status() coremanager.Status        { return coremanager.Status{} }
+func (s *stubManager) Usage(bool) coremanager.UsageStats { return coremanager.UsageStats{} }
+func (s *stubManager) Config() string                    { return s.cfg }
+func (s *stubManager) Logs() []string                    { return nil }
+func (s *stubManager) Subscribe() (int64, <-chan string) { return 0, make(chan string) }
+func (s *stubManager) Unsubscribe(int64)                 {}
+func (s *stubManager) SavedConfig() string               { return s.cfg }
 func (s *stubManager) RuntimeInfo(context.Context) coremanager.RuntimeInfo {
 	return coremanager.RuntimeInfo{Available: true, Module: "stub"}
 }
-func (s *stubManager) Version(context.Context) (string, error) { return "stub", nil }
+func (s *stubManager) Version(context.Context) (string, error)               { return "stub", nil }
 func (s *stubManager) AddUser(context.Context, coremanager.UserConfig) error { return nil }
 func (s *stubManager) RemoveUser(context.Context, string, string) error      { return nil }
 func (s *stubManager) KickUser(context.Context, string) (int, error)         { return 0, nil }
@@ -94,6 +95,9 @@ func TestAPIDispatcher_StartRestartRoundTrip(t *testing.T) {
 	}
 	if _, err := d.Handle(context.Background(), "Restart", json.RawMessage(`{"config":"{\"v\":1}"}`)); err != nil {
 		t.Fatalf("Restart err: %v", err)
+	}
+	if _, err := d.Handle(context.Background(), "Recycle", nil); err != nil {
+		t.Fatalf("Recycle err: %v", err)
 	}
 	if _, err := d.Handle(context.Background(), "Stop", nil); err != nil {
 		t.Fatalf("Stop err: %v", err)
@@ -322,4 +326,3 @@ func TestConfigHasher_NonEmptyChanges(t *testing.T) {
 		t.Fatalf("non-empty config should hash to non-empty")
 	}
 }
-

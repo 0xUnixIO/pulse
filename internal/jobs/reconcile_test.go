@@ -10,6 +10,8 @@ import (
 	"time"
 
 	"pulse/internal/nodes"
+	"pulse/internal/nodes/confighash"
+	"pulse/internal/proxycfg"
 	"pulse/internal/users"
 )
 
@@ -20,10 +22,10 @@ func xrayCfgWithClients(tag string, clients ...map[string]any) string {
 		clients = []map[string]any{}
 	}
 	cfg := map[string]any{
+		"pulse": map[string]any{"outboundEpoch": proxycfg.OutboundEpoch},
 		"inbounds": []map[string]any{{
-			"tag":         tag,
-			"trafficRate": 1,
-			"settings":    map[string]any{"clients": clients},
+			"tag":      tag,
+			"settings": map[string]any{"clients": clients},
 		}},
 	}
 	b, _ := json.Marshal(cfg)
@@ -167,6 +169,40 @@ func TestReconcileNodeConfigs_InSyncNoApply(t *testing.T) {
 	defer mu.Unlock()
 	if restarts != 0 {
 		t.Errorf("hash 一致却重启了节点：restart=%d", restarts)
+	}
+}
+
+// TestReconcileNodeConfigs_StaleOutboundEpochReapplied 用户列表 hash 一致时，
+// 没有 pulse.outboundEpoch 的旧 JSON 仍要下发一次。否则 UseIPv4 / keepalive
+// 只存在于新生成的配置里，已在跑的节点永远拿不到。
+func TestReconcileNodeConfigs_StaleOutboundEpochReapplied(t *testing.T) {
+	resetReconcileState()
+	nodeStore, userStore, ibStore := limitFixture(t, 1<<40)
+
+	stale := `{"inbounds":[{"tag":"vless-in","settings":{"clients":[{"email":"alice@vless-in","id":"11111111-1111-1111-1111-111111111111"}]}}]}`
+	expected, err := ComputeNodeConfigHash(context.Background(), "n1", userStore, ibStore, nil)
+	if err != nil {
+		t.Fatalf("expected hash: %v", err)
+	}
+	if confighash.HashFromXrayJSON(stale) != expected {
+		t.Fatal("fixture 的用户 hash 应与 server 一致，本用例只覆盖出口代际")
+	}
+
+	var mu sync.Mutex
+	restarts := 0
+	dial := reconcileDial(stale, &restarts, &mu)
+
+	res, err := ReconcileNodeConfigs(context.Background(), nodeStore, userStore, ibStore, nil, dial, ApplyOptions{})
+	if err != nil {
+		t.Fatalf("ReconcileNodeConfigs: %v", err)
+	}
+	if res.NodesApplied != 1 {
+		t.Fatalf("NodesApplied=%d, want 1（旧出口配置应下发一次）", res.NodesApplied)
+	}
+	mu.Lock()
+	defer mu.Unlock()
+	if restarts != 1 {
+		t.Fatalf("restart=%d, want 1", restarts)
 	}
 }
 

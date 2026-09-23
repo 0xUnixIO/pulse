@@ -216,6 +216,14 @@ func (c *Client) Restart(ctx context.Context, req ConfigRequest) (Status, error)
 	return out, err
 }
 
+// Recycle 让节点用当前配置优雅重载核心，即使配置哈希未变。
+// 用于落地 SS 出口粘死：Restart 在 config 相同会短路，这里强制换实例。
+func (c *Client) Recycle(ctx context.Context) (Status, error) {
+	var out Status
+	err := c.callHub(ctx, "Recycle", nil, &out)
+	return out, err
+}
+
 // AddUser 向节点正在运行的 inbound 热增单个用户，无需重启核心。
 func (c *Client) AddUser(ctx context.Context, req UserChangeRequest) error {
 	return c.callHub(ctx, "AddUser", req, nil)

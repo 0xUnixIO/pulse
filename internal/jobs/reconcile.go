@@ -88,6 +88,7 @@ func ReconcileNodeConfigs(
 		node   nodes.Node
 		client *nodes.Client
 		actual string // 实际配置 hash；空表示无可比对配置
+		raw    string // 节点正在跑的 xray JSON，用来看出口代际
 		skip   bool
 		errMsg string
 	}
@@ -119,7 +120,12 @@ func ReconcileNodeConfigs(
 				checks[idx] = nodeCheck{node: node, skip: true}
 				return
 			}
-			checks[idx] = nodeCheck{node: node, client: c, actual: confighash.HashFromXrayJSON(cfg.Config)}
+			checks[idx] = nodeCheck{
+				node:   node,
+				client: c,
+				raw:    cfg.Config,
+				actual: confighash.HashFromXrayJSON(cfg.Config),
+			}
 		}(i, n)
 	}
 	wg.Wait()
@@ -145,7 +151,10 @@ func ReconcileNodeConfigs(
 			result.Errors = append(result.Errors, chk.node.ID+": expected hash: "+err.Error())
 			continue
 		}
-		if expected == chk.actual {
+		// 用户 hash 一致时，旧 JSON 仍可能缺 UseIPv4 / keepalive。
+		// 这些字段不进 hash；看 pulse.outboundEpoch，低了就下发一次。
+		staleOutbound := proxycfg.OutboundConfigStale(chk.raw)
+		if expected == chk.actual && !staleOutbound {
 			continue
 		}
 

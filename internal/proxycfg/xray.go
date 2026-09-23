@@ -29,6 +29,29 @@ func deriveSecret(secret string, keyLen int) string {
 	return base64.StdEncoding.EncodeToString(key)
 }
 
+// OutboundEpoch 是出口渲染代际，写入生成 JSON 的 pulse.outboundEpoch。
+// xray 忽略这个未知字段。对账看到运行配置代际更低时下发一次，
+// 让不进用户 hash 的出口变更（UseIPv4、keepalive）到达已在跑的节点。
+// 只改这类出口行为时递增。
+const OutboundEpoch = 1
+
+// OutboundConfigStale 判断运行中的 xray JSON 是否还没有当前出口代际。
+// 解析失败时返回 false，避免一份坏配置被当成需要反复下发。
+func OutboundConfigStale(cfgJSON string) bool {
+	if cfgJSON == "" {
+		return false
+	}
+	var head struct {
+		Pulse struct {
+			OutboundEpoch int `json:"outboundEpoch"`
+		} `json:"pulse"`
+	}
+	if err := json.Unmarshal([]byte(cfgJSON), &head); err != nil {
+		return false
+	}
+	return head.Pulse.OutboundEpoch < OutboundEpoch
+}
+
 // SSUserPassword 返回 shadowsocks 热增/全量配置共用的用户 PSK。
 // method 为 2022-* 且 secret 非空时做 HMAC 派生，否则回退原始 secret。
 func SSUserPassword(userSecret, method string) string {
@@ -76,13 +99,19 @@ type BuildOptions struct {
 
 // Xray 配置顶层结构
 type xrayConfig struct {
-	Log       xrayLog             `json:"log"`
-	API       *xrayAPI            `json:"api,omitempty"`
-	Stats     *struct{}           `json:"stats,omitempty"`
-	Policy    *xrayPolicy         `json:"policy,omitempty"`
-	Inbounds  []xrayInbound       `json:"inbounds"`
-	Outbounds []xrayOutbound      `json:"outbounds"`
-	Routing   *xrayRouting        `json:"routing,omitempty"`
+	Log       xrayLog        `json:"log"`
+	API       *xrayAPI       `json:"api,omitempty"`
+	Stats     *struct{}      `json:"stats,omitempty"`
+	Policy    *xrayPolicy    `json:"policy,omitempty"`
+	Inbounds  []xrayInbound  `json:"inbounds"`
+	Outbounds []xrayOutbound `json:"outbounds"`
+	Routing   *xrayRouting   `json:"routing,omitempty"`
+	Pulse     *pulseMeta     `json:"pulse,omitempty"`
+}
+
+// pulseMeta 是 xray 不认识的旁路字段，只给控制面判断出口配置代际。
+type pulseMeta struct {
+	OutboundEpoch int `json:"outboundEpoch"`
 }
 
 type xrayLog struct {
@@ -126,14 +155,14 @@ type xrayAnyTLSUser struct {
 }
 
 type xrayInboundSettings struct {
-	Clients    []xrayClient        `json:"clients,omitempty"`
-	Users      []xrayAnyTLSUser    `json:"users,omitempty"`      // anytls
-	Decryption string              `json:"decryption,omitempty"` // vless 必须 "none"
-	Network    string              `json:"network,omitempty"`    // ss
-	Method     string              `json:"method,omitempty"`     // ss
-	Password   string              `json:"password,omitempty"`   // ss server PSK（单用户）
-	Version    int                 `json:"version,omitempty"`    // hy2 固定 2
-	HyClients  []xrayHysteriaUser  `json:"-"`                    // 仅内部，序列化时若非空 -> 覆盖 Clients
+	Clients    []xrayClient       `json:"clients,omitempty"`
+	Users      []xrayAnyTLSUser   `json:"users,omitempty"`      // anytls
+	Decryption string             `json:"decryption,omitempty"` // vless 必须 "none"
+	Network    string             `json:"network,omitempty"`    // ss
+	Method     string             `json:"method,omitempty"`     // ss
+	Password   string             `json:"password,omitempty"`   // ss server PSK（单用户）
+	Version    int                `json:"version,omitempty"`    // hy2 固定 2
+	HyClients  []xrayHysteriaUser `json:"-"`                    // 仅内部，序列化时若非空 -> 覆盖 Clients
 }
 
 // MarshalJSON：当 HyClients 非空时（hy2），把它序列化为 "clients"，避免与 vless/trojan
@@ -160,15 +189,15 @@ type xrayHysteriaUser struct {
 }
 
 type xrayHysteriaSettings struct {
-	Version        int              `json:"version"`
-	Auth           string           `json:"auth,omitempty"`           // obfs salamander 密码（启用混淆时）
-	UdpIdleTimeout int              `json:"udpIdleTimeout,omitempty"` // 秒
-	Masquerade     *xrayMasquerade  `json:"masquerade,omitempty"`
+	Version        int             `json:"version"`
+	Auth           string          `json:"auth,omitempty"`           // obfs salamander 密码（启用混淆时）
+	UdpIdleTimeout int             `json:"udpIdleTimeout,omitempty"` // 秒
+	Masquerade     *xrayMasquerade `json:"masquerade,omitempty"`
 }
 
 type xrayMasquerade struct {
-	Type        string `json:"type"`                  // proxy / file / string / lazy
-	URL         string `json:"url,omitempty"`         // type=proxy
+	Type        string `json:"type"`          // proxy / file / string / lazy
+	URL         string `json:"url,omitempty"` // type=proxy
 	RewriteHost bool   `json:"rewriteHost,omitempty"`
 }
 
@@ -190,9 +219,9 @@ type xrayStream struct {
 }
 
 type xrayTLSSettings struct {
-	ServerName   string             `json:"serverName,omitempty"`
-	ALPN         []string           `json:"alpn,omitempty"`
-	Certificates []xrayCertificate  `json:"certificates,omitempty"`
+	ServerName   string            `json:"serverName,omitempty"`
+	ALPN         []string          `json:"alpn,omitempty"`
+	Certificates []xrayCertificate `json:"certificates,omitempty"`
 }
 
 type xrayCertificate struct {
@@ -214,17 +243,25 @@ type xrayWSSettings struct {
 }
 
 type xrayOutbound struct {
-	Protocol       string          `json:"protocol"`
-	Tag            string          `json:"tag"`
-	Settings       map[string]any  `json:"settings,omitempty"`
+	Protocol       string            `json:"protocol"`
+	Tag            string            `json:"tag"`
+	Settings       map[string]any    `json:"settings,omitempty"`
 	StreamSettings *xrayClientStream `json:"streamSettings,omitempty"`
 }
 
 // xrayClientStream 出口代理的客户端 stream 配置（与服务端 xrayStream 不同）。
 type xrayClientStream struct {
-	Network         string                    `json:"network"`
-	Security        string                    `json:"security,omitempty"`
+	Network         string                     `json:"network,omitempty"`
+	Security        string                     `json:"security,omitempty"`
 	RealitySettings *xrayClientRealitySettings `json:"realitySettings,omitempty"`
+	Sockopt         *xraySockopt               `json:"sockopt,omitempty"`
+}
+
+// xraySockopt 出口 TCP 选项。落地 SS 必须开 keepalive，否则对端 NAT 抖动后
+// 半开连接会一直粘着：探测短连接还能建，长会话回不来。
+type xraySockopt struct {
+	TCPKeepAliveIdle     int `json:"tcpKeepAliveIdle,omitempty"`
+	TCPKeepAliveInterval int `json:"tcpKeepAliveInterval,omitempty"`
 }
 
 type xrayClientRealitySettings struct {
@@ -527,7 +564,7 @@ func BuildXrayConfig(nodeInbounds []inbounds.Inbound, userAccesses []users.UserI
 
 	// 构建出口列表与路由规则
 	xrayOutbounds := []xrayOutbound{
-		{Protocol: "freedom", Tag: "direct"},
+		freedomOutbound("direct"),
 		{Protocol: "blackhole", Tag: "block"},
 	}
 	seenOutboundIDs := make(map[string]struct{})
@@ -665,7 +702,8 @@ func BuildXrayConfig(nodeInbounds []inbounds.Inbound, userAccesses []users.UserI
 	}
 
 	cfg := xrayConfig{
-		Log: xrayLog{Loglevel: "info"},
+		Pulse: &pulseMeta{OutboundEpoch: OutboundEpoch},
+		Log:   xrayLog{Loglevel: "info"},
 		API: &xrayAPI{
 			Tag:      "api",
 			Services: []string{"HandlerService", "LoggerService", "StatsService"},
@@ -802,7 +840,7 @@ func xrayRealityStreamFor(ib inbounds.Inbound) *xrayStream {
 func buildXrayOutboundFromNodeInbound(ib inbounds.Inbound, n nodes.Node, uib users.UserInbound, user users.User, tag string) xrayOutbound {
 	u, err := url.Parse(n.BaseURL)
 	if err != nil || u.Hostname() == "" {
-		return xrayOutbound{Protocol: "freedom", Tag: tag}
+		return freedomOutbound(tag)
 	}
 	method := ib.Method
 	if method == "" {
@@ -837,6 +875,12 @@ func buildXrayOutboundFromNodeInbound(ib inbounds.Inbound, n nodes.Node, uib use
 				"password": password,
 			}},
 		},
+		StreamSettings: &xrayClientStream{
+			Sockopt: &xraySockopt{
+				TCPKeepAliveIdle:     30,
+				TCPKeepAliveInterval: 15,
+			},
+		},
 	}
 }
 
@@ -844,11 +888,11 @@ func buildXrayOutboundFromNodeInbound(ib inbounds.Inbound, n nodes.Node, uib use
 func buildXrayOutboundBlock(ob outbounds.Outbound, tag string) xrayOutbound {
 	host, portStr, err := net.SplitHostPort(ob.Server)
 	if err != nil {
-		return xrayOutbound{Protocol: "freedom", Tag: tag}
+		return freedomOutbound(tag)
 	}
 	port, err := strconv.Atoi(portStr)
 	if err != nil || port <= 0 || port > 65535 {
-		return xrayOutbound{Protocol: "freedom", Tag: tag}
+		return freedomOutbound(tag)
 	}
 	switch ob.Protocol {
 	case "ss":
@@ -902,7 +946,19 @@ func buildXrayOutboundBlock(ob outbounds.Outbound, tag string) xrayOutbound {
 		}
 		return out
 	default:
-		return xrayOutbound{Protocol: "freedom", Tag: tag}
+		return freedomOutbound(tag)
+	}
+}
+
+// freedomOutbound 直连出口。显式 UseIPv4：缺省 AS_IS 会让 Go resolver 在双栈
+// 机器上优先 AAAA，测延迟第二跳（gstatic/cloudflare）容易因 IPv6 短超时变红。
+func freedomOutbound(tag string) xrayOutbound {
+	return xrayOutbound{
+		Protocol: "freedom",
+		Tag:      tag,
+		Settings: map[string]any{
+			"domainStrategy": "UseIPv4",
+		},
 	}
 }
 

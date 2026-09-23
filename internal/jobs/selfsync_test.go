@@ -9,6 +9,7 @@ import (
 	"pulse/internal/inbounds"
 	"pulse/internal/nodes"
 	"pulse/internal/nodes/confighash"
+	"pulse/internal/proxycfg"
 	"pulse/internal/users"
 )
 
@@ -18,14 +19,17 @@ func TestComputeNodeConfigHash_MatchesNodeSide(t *testing.T) {
 	userStore := users.NewMemoryStore()
 	ibStore := inbounds.NewMemoryStore()
 
-	// inbound：vless 一个，trojan 一个（不同 protocol，确保 token 取值分支被覆盖）
+	// inbound：vless 一个，trojan 一个（不同 protocol，确保 token 取值分支被覆盖）。
+	// TrafficRate 用生产默认 1.0（postgres 把 <=0 写成 1）。proxycfg 不会把
+	// 倍率写进 xray JSON，HashFromXrayJSON 读到的是 0；expected 若带上 DB 倍率，
+	// 全网节点会永久漂移、每 10 分钟重下发。
 	ibVless, _ := ibStore.UpsertInbound(inbounds.Inbound{
 		ID: "ib-v", NodeID: "n1", Protocol: "vless",
-		Tag: "vless-1", Port: 443, TrafficRate: 0,
+		Tag: "vless-1", Port: 443, TrafficRate: 1,
 	})
 	ibTrojan, _ := ibStore.UpsertInbound(inbounds.Inbound{
 		ID: "ib-t", NodeID: "n1", Protocol: "trojan",
-		Tag: "trojan-1", Port: 8443, TrafficRate: 0,
+		Tag: "trojan-1", Port: 8443, TrafficRate: 2,
 	})
 
 	// 两个用户，都 active；user 级 UUID/Secret 优先
@@ -72,6 +76,50 @@ func TestComputeNodeConfigHash_MatchesNodeSide(t *testing.T) {
 	}
 	if len(got) != 64 {
 		t.Fatalf("expected 64-hex sha256, got %q", got)
+	}
+}
+
+func TestComputeNodeConfigHash_MatchesShadowsocksPSK(t *testing.T) {
+	userStore := users.NewMemoryStore()
+	ibStore := inbounds.NewMemoryStore()
+
+	// 与 BuildXrayConfig 一致：method 非 2022-* 时默认 2022-blake3-aes-128-gcm，
+	// client.password 是 SSUserPassword 派生 PSK，不是原始 Secret。
+	ib, _ := ibStore.UpsertInbound(inbounds.Inbound{
+		ID: "ib-ss", NodeID: "n1", Protocol: "shadowsocks",
+		Tag: "shadowsocks-23941", Port: 23941, Method: "",
+		TrafficRate: 1,
+	})
+	_, _ = userStore.UpsertUser(users.User{
+		ID: "ua", Username: "alice", Status: users.StatusActive,
+		UUID: "uuid-alice", Secret: "secret-alice",
+	})
+	_, _ = userStore.UpsertUserInbound(users.UserInbound{
+		ID: "a-ss", UserID: "ua", InboundID: ib.ID, NodeID: "n1",
+	})
+
+	got, err := ComputeNodeConfigHash(context.Background(), "n1", userStore, ibStore, nil)
+	if err != nil {
+		t.Fatalf("ComputeNodeConfigHash error = %v", err)
+	}
+
+	psk := proxycfg.SSUserPassword("secret-alice", "2022-blake3-aes-128-gcm")
+	if psk == "" || psk == "secret-alice" {
+		t.Fatalf("expected derived SS2022 PSK, got %q", psk)
+	}
+	xray := `{"inbounds":[{"tag":"shadowsocks-23941","settings":{"clients":[
+		{"password":"` + psk + `","email":"alice@shadowsocks-23941"}
+	]}}]}`
+	want := confighash.HashFromXrayJSON(xray)
+	if got != want {
+		t.Fatalf("server vs node hash mismatch:\n  server = %s\n  node   = %s", got, want)
+	}
+
+	raw := confighash.HashFromXrayJSON(`{"inbounds":[{"tag":"shadowsocks-23941","settings":{"clients":[
+		{"password":"secret-alice","email":"alice@shadowsocks-23941"}
+	]}}]}`)
+	if raw == want {
+		t.Fatal("derived PSK and raw secret should produce different hashes")
 	}
 }
 

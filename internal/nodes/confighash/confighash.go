@@ -10,6 +10,9 @@
 //  3. json.Marshal 一个固定字段顺序的结构 {inbounds, users}；
 //  4. SHA256(canonical_json) → hex 字符串。
 //
+// TrafficRate 仍留在 canonical inbound 里以保持哈希形状稳定，但 server / node
+// 两侧都应传 0：proxycfg 不把倍率写入 xray JSON，HashFromXrayJSON 读到的也是 0。
+//
 // 字段、排序、struct 标签必须保持稳定。任何修改都会改变 hash 输出，
 // 节点与控制面必须同步发版才能保证一致性。
 package confighash
