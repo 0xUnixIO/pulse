@@ -3,21 +3,28 @@ package serverapi
 import (
 	"encoding/json"
 	"errors"
+	"log/slog"
 	"net/http"
 	"strings"
 
 	"pulse/internal/cfdomain"
 	"pulse/internal/cloudflarex"
 	"pulse/internal/idgen"
+	"pulse/internal/nodedomain"
+	"pulse/internal/nodes"
 )
 
 type cfDomainAPI struct {
-	store cfdomain.Store
+	store      cfdomain.Store
+	ndStore    nodedomain.Store
+	nodesStore nodes.Store
 }
 
 // RegisterCFDomainAPI 注册 CF 域名管理相关的 API 路由。
-func RegisterCFDomainAPI(mux *http.ServeMux, store cfdomain.Store) {
-	a := &cfDomainAPI{store: store}
+// ndStore/nodesStore 用于在面板里增改 DNS 记录后同步写入节点域名表，
+// 使入站的域名选择器无需手动“从 CF 同步”即可看到新记录。
+func RegisterCFDomainAPI(mux *http.ServeMux, store cfdomain.Store, ndStore nodedomain.Store, nodesStore nodes.Store) {
+	a := &cfDomainAPI{store: store, ndStore: ndStore, nodesStore: nodesStore}
 	mux.HandleFunc("/v1/cf-domains", a.handleCFDomains)
 	mux.HandleFunc("/v1/cf-domains/", a.handleCFDomainRoutes)
 }
@@ -185,6 +192,7 @@ func (a *cfDomainAPI) handleDNSRecords(w http.ResponseWriter, r *http.Request, d
 			writeJSON(w, http.StatusInternalServerError, map[string]any{"error": err.Error()})
 			return
 		}
+		a.mirrorNodeDomain(r, domainID, created)
 		writeJSON(w, http.StatusCreated, created)
 
 	default:
@@ -214,6 +222,7 @@ func (a *cfDomainAPI) handleDNSRecordByID(w http.ResponseWriter, r *http.Request
 			writeJSON(w, http.StatusInternalServerError, map[string]any{"error": err.Error()})
 			return
 		}
+		a.mirrorNodeDomain(r, domainID, updated)
 		writeJSON(w, http.StatusOK, updated)
 
 	case http.MethodDelete:
@@ -225,6 +234,49 @@ func (a *cfDomainAPI) handleDNSRecordByID(w http.ResponseWriter, r *http.Request
 
 	default:
 		writeMethodNotAllowed(w, http.MethodPut+", "+http.MethodDelete)
+	}
+}
+
+// mirrorNodeDomain 把面板里新建/修改的 DNS 记录写入节点域名表。
+// A/AAAA 按 IP 自动匹配节点；匹配不到时保留该 FQDN 原有的节点分配。
+// 失败只记日志，不影响 CF 操作本身的结果（之后仍可手动“从 CF 同步”）。
+func (a *cfDomainAPI) mirrorNodeDomain(r *http.Request, cfDomainID string, rec cloudflarex.DNSRecord) {
+	if a.ndStore == nil || rec.Name == "" {
+		return
+	}
+	switch rec.Type {
+	case "A", "AAAA", "CNAME":
+	default:
+		return
+	}
+
+	nodeID := ""
+	if a.nodesStore != nil && (rec.Type == "A" || rec.Type == "AAAA") {
+		if nodeList, err := a.nodesStore.List(); err == nil {
+			nodeID = buildNodeIPMap(nodeList)[rec.Content]
+		}
+	}
+	if nodeID == "" {
+		if existing, err := a.ndStore.ListByCFDomain(cfDomainID); err == nil {
+			for _, nd := range existing {
+				if nd.FQDN == rec.Name {
+					nodeID = nd.NodeID
+					break
+				}
+			}
+		}
+	}
+
+	if _, err := a.ndStore.Upsert(nodedomain.NodeDomain{
+		ID:         idgen.NextString(),
+		NodeID:     nodeID,
+		CFDomainID: cfDomainID,
+		FQDN:       rec.Name,
+		RecordType: rec.Type,
+		Content:    rec.Content,
+		Proxied:    rec.Proxied,
+	}); err != nil {
+		slog.WarnContext(r.Context(), "sync node domain after dns record change failed", "fqdn", rec.Name, "err", err)
 	}
 }
 
