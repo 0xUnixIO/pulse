@@ -1123,7 +1123,7 @@ func Run() error {
 	serverapi.RegisterRouteRulesAPI(protectedV1, routeRuleStore, store, userStore, inboundStore, outboundStore, nodeAPI.Dial, applyOpts)
 	serverapi.RegisterPlansAPI(protectedV1, db.PlanStore())
 	serverapi.RegisterToolsAPI(protectedV1)
-	serverapi.RegisterCFDomainAPI(protectedV1, db.CFDomainStore())
+	serverapi.RegisterCFDomainAPI(protectedV1, db.CFDomainStore(), db.NodeDomainStore(), store)
 	serverapi.RegisterUserGroupAPI(protectedV1, db.UserGroupStore(), userStore, inboundStore, panelHandler.ApplyNodes)
 	serverapi.RegisterNodeDomainAPI(protectedV1, db.NodeDomainStore(), db.CFDomainStore(), store)
 	serverapi.RegisterUpdateAPI(protectedV1, settingsStore)
