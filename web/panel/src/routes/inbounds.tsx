@@ -1093,7 +1093,7 @@ function HostFormDialog({
   const [form, setForm] = useState<HostFormState>(EMPTY_HOST_FORM);
   const [submitting, setSubmitting] = useState(false);
   const [showRelay, setShowRelay] = useState(false);
-  const [autoGen, setAutoGen] = useState<{ zone: CFDomain; subdomain: string; remark: string } | null>(null);
+  const [autoGen, setAutoGen] = useState<{ zone: CFDomain; zones: CFDomain[]; subdomain: string; remark: string } | null>(null);
   const [autoGenApplying, setAutoGenApplying] = useState(false);
   const [geoLooking, setGeoLooking] = useState(false);
   const [pickerOpen, setPickerOpen] = useState(false);
@@ -1145,8 +1145,15 @@ function HostFormDialog({
   const handleAutoGen = async () => {
     try {
       const res = await cfApi.listDomains();
-      const zone = res.domains?.[0];
-      if (!zone) { toast.error("暂无已管理的 CF 域名"); return; }
+      const zones = res.domains ?? [];
+      const defaultZone = zones[0];
+      if (!defaultZone) { toast.error("暂无已管理的 CF 域名"); return; }
+      // 优先选与当前地址后缀匹配的 zone（取最长匹配），否则沿用第一个
+      const addr = form.address.trim().toLowerCase();
+      const zone =
+        zones
+          .filter((z) => addr === z.zone_name.toLowerCase() || addr.endsWith(`.${z.zone_name.toLowerCase()}`))
+          .sort((a, b) => b.zone_name.length - a.zone_name.length)[0] ?? defaultZone;
       const parts: string[] = ["cdn"];
       const country = slugPart(form.country);
       if (country) parts.push(country);
@@ -1159,7 +1166,7 @@ function HostFormDialog({
       const nodeName = nodes.find((n) => n.id === nodeId)?.name ?? "";
       const displayPort = form.port && form.port !== "0" ? form.port : (inboundTag?.split(":")[1] ?? "");
       const remark = [nodeName, inboundProtocol, displayPort, outboundName].filter(Boolean).join(" ");
-      setAutoGen({ zone, subdomain, remark });
+      setAutoGen({ zone, zones, subdomain, remark });
     } catch (err) {
       if (!handleAuthError(err)) toast.error("获取域名失败");
     }
@@ -1313,9 +1320,32 @@ function HostFormDialog({
                           className="flex-1 font-mono text-sm"
                           placeholder="子域名"
                         />
-                        <span className="shrink-0 text-sm text-[hsl(var(--muted-foreground))]">
-                          .{autoGen.zone.zone_name}
-                        </span>
+                        {autoGen.zones.length > 1 ? (
+                          <Select
+                            value={autoGen.zone.id}
+                            onValueChange={(id) =>
+                              setAutoGen((prev) => {
+                                const zone = prev?.zones.find((z) => z.id === id);
+                                return prev && zone ? { ...prev, zone } : prev;
+                              })
+                            }
+                          >
+                            <SelectTrigger className="h-9 w-auto shrink-0 font-mono text-sm">
+                              <SelectValue />
+                            </SelectTrigger>
+                            <SelectContent>
+                              {autoGen.zones.map((z) => (
+                                <SelectItem key={z.id} value={z.id} className="font-mono">
+                                  .{z.zone_name}
+                                </SelectItem>
+                              ))}
+                            </SelectContent>
+                          </Select>
+                        ) : (
+                          <span className="shrink-0 text-sm text-[hsl(var(--muted-foreground))]">
+                            .{autoGen.zone.zone_name}
+                          </span>
+                        )}
                         <span className="shrink-0 text-xs text-[hsl(var(--muted-foreground))]">
                           → {nodeIp || "?"}
                         </span>
