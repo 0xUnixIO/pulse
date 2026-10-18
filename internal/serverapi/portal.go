@@ -197,31 +197,37 @@ func (a *portalAPI) handlePortalPost(w http.ResponseWriter, r *http.Request) {
 		a.handlePortalHostExclude(w, r, user)
 	case "reset-traffic":
 		a.handlePortalResetTraffic(w, r, user)
+	case "auto-traffic-reset":
+		a.handlePortalAutoTrafficReset(w, r, user)
 	default:
 		writeJSON(w, http.StatusNotFound, map[string]any{"error": "route not found"})
+	}
+}
+
+// trafficResetErrorMessage 将重置资格错误转换为门户提示文案。
+func trafficResetErrorMessage(err error) string {
+	switch {
+	case errors.Is(err, users.ErrTrafficResetBadStatus):
+		return "当前账户状态无法自助重置流量"
+	case errors.Is(err, users.ErrTrafficResetNoUsage):
+		return "当前没有可重置的流量"
+	case errors.Is(err, users.ErrTrafficResetPermanent):
+		return "永久有效账户无法自助重置流量"
+	case errors.Is(err, users.ErrTrafficResetShortValidity):
+		return "剩余有效期不足 30 天，无法自助重置流量"
+	default:
+		return "当前无法重置流量"
 	}
 }
 
 // handlePortalResetTraffic 允许用户通过自己的门户凭据重置流量。
 func (a *portalAPI) handlePortalResetTraffic(w http.ResponseWriter, r *http.Request, user users.User) {
 	now := time.Now().UTC()
-	if user.Status != users.StatusActive && user.Status != users.StatusLimited {
-		writeJSON(w, http.StatusBadRequest, map[string]any{"error": "当前账户状态无法自助重置流量"})
+	if err := user.CheckTrafficReset(now, users.TrafficResetValidityCostDays); err != nil {
+		writeJSON(w, http.StatusBadRequest, map[string]any{"error": trafficResetErrorMessage(err)})
 		return
 	}
-	if user.UploadBytes+user.DownloadBytes <= 0 {
-		writeJSON(w, http.StatusBadRequest, map[string]any{"error": "当前没有可重置的流量"})
-		return
-	}
-	if user.ExpireAt == nil {
-		writeJSON(w, http.StatusBadRequest, map[string]any{"error": "永久有效账户无法自助重置流量"})
-		return
-	}
-	if !user.ExpireAt.After(now.AddDate(0, 0, 30)) {
-		writeJSON(w, http.StatusBadRequest, map[string]any{"error": "剩余有效期不足 30 天，无法自助重置流量"})
-		return
-	}
-	if _, err := a.users.ResetTrafficForValidity(user.ID, now, 30); err != nil {
+	if _, err := jobs.ResetTrafficForValidity(a.users, user.ID, now); err != nil {
 		if errors.Is(err, users.ErrTrafficResetNotAllowed) {
 			writeJSON(w, http.StatusConflict, map[string]any{"error": "账户状态已变化，请刷新后重试"})
 			return
@@ -230,9 +236,40 @@ func (a *portalAPI) handlePortalResetTraffic(w http.ResponseWriter, r *http.Requ
 		return
 	}
 
-	accesses, err := a.users.ListUserInboundsByUser(user.ID)
+	a.applyUserNodes(user.ID)
+	writeJSON(w, http.StatusOK, map[string]any{"ok": true})
+}
+
+// handlePortalAutoTrafficReset 切换「流量用尽自动重置」开关。
+// POST /v1/portal/{token}/auto-traffic-reset  body: {"enabled": true/false}
+// 开启时若用户已超限且满足条件，立即执行一次自动重置并下发节点配置。
+func (a *portalAPI) handlePortalAutoTrafficReset(w http.ResponseWriter, r *http.Request, user users.User) {
+	var body struct {
+		Enabled *bool `json:"enabled"`
+	}
+	if err := json.NewDecoder(r.Body).Decode(&body); err != nil || body.Enabled == nil {
+		writeJSON(w, http.StatusBadRequest, map[string]any{"error": "enabled is required"})
+		return
+	}
+	if err := a.users.SetAutoTrafficReset(user.ID, *body.Enabled); err != nil {
+		internalError(w, r, err)
+		return
+	}
+	reset := false
+	if *body.Enabled {
+		if _, ok := jobs.TryAutoResetTraffic(r.Context(), a.users, user.ID, time.Now().UTC(), a.applyOpts.Alerter); ok {
+			reset = true
+			a.applyUserNodes(user.ID)
+		}
+	}
+	writeJSON(w, http.StatusOK, map[string]any{"ok": true, "auto_traffic_reset": *body.Enabled, "reset": reset})
+}
+
+// applyUserNodes 异步向用户关联的所有节点重新下发配置。
+func (a *portalAPI) applyUserNodes(userID string) {
+	accesses, err := a.users.ListUserInboundsByUser(userID)
 	if err != nil {
-		log.Printf("handlePortalResetTraffic: list user inbounds %s: %v", user.ID, err)
+		log.Printf("portal: list user inbounds %s: %v", userID, err)
 	}
 	nodeIDs := make(map[string]struct{})
 	for _, access := range accesses {
@@ -243,12 +280,10 @@ func (a *portalAPI) handlePortalResetTraffic(w http.ResponseWriter, r *http.Requ
 			ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
 			defer cancel()
 			if err := jobs.ApplyNode(ctx, id, a.nodes, a.users, a.inbounds, a.outbounds, a.dial, a.applyOpts); err != nil {
-				log.Printf("handlePortalResetTraffic: apply node %s: %v", id, err)
+				log.Printf("portal: apply node %s: %v", id, err)
 			}
 		}(nodeID)
 	}
-
-	writeJSON(w, http.StatusOK, map[string]any{"ok": true})
 }
 func (a *portalAPI) handlePortalInfo(w http.ResponseWriter, r *http.Request, user users.User) {
 	scheme := "https"
@@ -306,6 +341,7 @@ func (a *portalAPI) handlePortalInfo(w http.ResponseWriter, r *http.Request, use
 		"expire_at":              user.ExpireAt,
 		"nodes":                  nodeInfos,
 		"next_traffic_reset_at": nextTrafficResetAt(user.DataLimitResetStrategy, user.CreatedAt, user.LastTrafficResetAt),
+		"auto_traffic_reset":    user.AutoTrafficReset,
 	}
 
 	// 公告列表：激活的排在最前面

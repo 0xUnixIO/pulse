@@ -136,6 +136,7 @@ export interface User {
   email?: string;
   uuid?: string;
   secret?: string;
+  auto_traffic_reset?: boolean;
 }
 
 export interface UsersResponse {

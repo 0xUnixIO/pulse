@@ -123,7 +123,7 @@ SELECT id, username, status, note, expire_at, data_limit_reset_strategy,
        raw_upload_bytes, raw_download_bytes,
        on_hold_expire_at, last_traffic_reset_at, online_at, connections, devices,
        created_at, sub_token, stripe_customer_id, current_plan_id, email, uuid, secret,
-       plan_traffic_limit_bytes
+       plan_traffic_limit_bytes, auto_traffic_reset
 FROM users
 WHERE id = $1
 `
@@ -157,6 +157,7 @@ func (q *Queries) GetUserByID(ctx context.Context, id string) (User, error) {
 		&i.Uuid,
 		&i.Secret,
 		&i.PlanTrafficLimitBytes,
+		&i.AutoTrafficReset,
 	)
 	return i, err
 }
@@ -167,7 +168,7 @@ SELECT id, username, status, note, expire_at, data_limit_reset_strategy,
        raw_upload_bytes, raw_download_bytes,
        on_hold_expire_at, last_traffic_reset_at, online_at, connections, devices,
        created_at, sub_token, stripe_customer_id, current_plan_id, email, uuid, secret,
-       plan_traffic_limit_bytes
+       plan_traffic_limit_bytes, auto_traffic_reset
 FROM users
 WHERE stripe_customer_id = $1
 `
@@ -201,6 +202,7 @@ func (q *Queries) GetUserByStripeCustomerID(ctx context.Context, stripeCustomerI
 		&i.Uuid,
 		&i.Secret,
 		&i.PlanTrafficLimitBytes,
+		&i.AutoTrafficReset,
 	)
 	return i, err
 }
@@ -211,7 +213,7 @@ SELECT id, username, status, note, expire_at, data_limit_reset_strategy,
        raw_upload_bytes, raw_download_bytes,
        on_hold_expire_at, last_traffic_reset_at, online_at, connections, devices,
        created_at, sub_token, stripe_customer_id, current_plan_id, email, uuid, secret,
-       plan_traffic_limit_bytes
+       plan_traffic_limit_bytes, auto_traffic_reset
 FROM users
 WHERE sub_token = $1
 `
@@ -245,6 +247,7 @@ func (q *Queries) GetUserBySubToken(ctx context.Context, subToken string) (User,
 		&i.Uuid,
 		&i.Secret,
 		&i.PlanTrafficLimitBytes,
+		&i.AutoTrafficReset,
 	)
 	return i, err
 }
@@ -276,7 +279,7 @@ SELECT id, username, status, note, expire_at, data_limit_reset_strategy,
        raw_upload_bytes, raw_download_bytes,
        on_hold_expire_at, last_traffic_reset_at, online_at, connections, devices,
        created_at, sub_token, stripe_customer_id, current_plan_id, email, uuid, secret,
-       plan_traffic_limit_bytes
+       plan_traffic_limit_bytes, auto_traffic_reset
 FROM users
 WHERE id = ANY($1::text[])
 `
@@ -316,6 +319,7 @@ func (q *Queries) GetUsersByIDs(ctx context.Context, dollar_1 []string) ([]User,
 			&i.Uuid,
 			&i.Secret,
 			&i.PlanTrafficLimitBytes,
+			&i.AutoTrafficReset,
 		); err != nil {
 			return nil, err
 		}
@@ -836,7 +840,7 @@ SELECT id, username, status, note, expire_at, data_limit_reset_strategy,
        raw_upload_bytes, raw_download_bytes,
        on_hold_expire_at, last_traffic_reset_at, online_at, connections, devices,
        created_at, sub_token, stripe_customer_id, current_plan_id, email, uuid, secret,
-       plan_traffic_limit_bytes
+       plan_traffic_limit_bytes, auto_traffic_reset
 FROM users
 ORDER BY id
 `
@@ -876,6 +880,7 @@ func (q *Queries) ListUsers(ctx context.Context) ([]User, error) {
 			&i.Uuid,
 			&i.Secret,
 			&i.PlanTrafficLimitBytes,
+			&i.AutoTrafficReset,
 		); err != nil {
 			return nil, err
 		}
@@ -885,6 +890,19 @@ func (q *Queries) ListUsers(ctx context.Context) ([]User, error) {
 		return nil, err
 	}
 	return items, nil
+}
+
+const setUserAutoTrafficReset = `-- name: SetUserAutoTrafficReset :execresult
+UPDATE users SET auto_traffic_reset = $2 WHERE id = $1
+`
+
+type SetUserAutoTrafficResetParams struct {
+	ID               string
+	AutoTrafficReset bool
+}
+
+func (q *Queries) SetUserAutoTrafficReset(ctx context.Context, arg SetUserAutoTrafficResetParams) (pgconn.CommandTag, error) {
+	return q.db.Exec(ctx, setUserAutoTrafficReset, arg.ID, arg.AutoTrafficReset)
 }
 
 const setUserCredentials = `-- name: SetUserCredentials :exec

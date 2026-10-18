@@ -68,6 +68,7 @@ func (s *UserStore) UpsertUser(user users.User) (users.User, error) {
 	return user, nil
 }
 
+// ResetTrafficForValidity 的 WHERE 条件需与 users.User.CheckTrafficReset 保持一致。
 func (s *UserStore) ResetTrafficForValidity(userID string, now time.Time, validityCostDays int) (users.User, error) {
 	tag, err := s.db.Exec(context.Background(), `
 		UPDATE users
@@ -94,12 +95,31 @@ func (s *UserStore) ResetTrafficForValidity(userID string, now time.Time, validi
 		return users.User{}, fmt.Errorf("reset traffic for validity: %w", err)
 	}
 	if tag.RowsAffected() == 0 {
-		if _, err := s.GetUser(userID); err != nil {
+		u, err := s.GetUser(userID)
+		if err != nil {
 			return users.User{}, err
+		}
+		// 尽量给出具体原因（条件与 User.CheckTrafficReset 一致）
+		if reason := u.CheckTrafficReset(now, validityCostDays); reason != nil {
+			return users.User{}, reason
 		}
 		return users.User{}, users.ErrTrafficResetNotAllowed
 	}
 	return s.GetUser(userID)
+}
+
+func (s *UserStore) SetAutoTrafficReset(userID string, enabled bool) error {
+	tag, err := sqlcgen.New(s.db).SetUserAutoTrafficReset(context.Background(), sqlcgen.SetUserAutoTrafficResetParams{
+		ID:               userID,
+		AutoTrafficReset: enabled,
+	})
+	if err != nil {
+		return fmt.Errorf("set auto traffic reset: %w", err)
+	}
+	if tag.RowsAffected() == 0 {
+		return users.ErrUserNotFound
+	}
+	return nil
 }
 
 func (s *UserStore) GetUser(id string) (users.User, error) {
@@ -525,6 +545,7 @@ func toUser(r sqlcgen.User) (users.User, error) {
 		Email:                  r.Email,
 		UUID:                   r.Uuid,
 		Secret:                 r.Secret,
+		AutoTrafficReset:       r.AutoTrafficReset,
 	}
 	if u.UsedBytes == 0 {
 		u.UsedBytes = u.UploadBytes + u.DownloadBytes

@@ -139,6 +139,7 @@ type Querier interface {
 	RemoveUserGroupMember(ctx context.Context, arg RemoveUserGroupMemberParams) error
 	RevertOrderToPending(ctx context.Context, id string) (pgconn.CommandTag, error)
 	SetHostExclusion(ctx context.Context, arg SetHostExclusionParams) error
+	SetUserAutoTrafficReset(ctx context.Context, arg SetUserAutoTrafficResetParams) (pgconn.CommandTag, error)
 	SetUserCredentials(ctx context.Context, arg SetUserCredentialsParams) error
 	// 插入后调用，保留每个用户最近 $2 条，超出部分按 id 升序删除（即最旧的先删）
 	TrimSubAccessLogsByUser(ctx context.Context, arg TrimSubAccessLogsByUserParams) error

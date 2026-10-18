@@ -45,7 +45,7 @@ SELECT id, username, status, note, expire_at, data_limit_reset_strategy,
        raw_upload_bytes, raw_download_bytes,
        on_hold_expire_at, last_traffic_reset_at, online_at, connections, devices,
        created_at, sub_token, stripe_customer_id, current_plan_id, email, uuid, secret,
-       plan_traffic_limit_bytes
+       plan_traffic_limit_bytes, auto_traffic_reset
 FROM users
 WHERE id = $1;
 
@@ -55,7 +55,7 @@ SELECT id, username, status, note, expire_at, data_limit_reset_strategy,
        raw_upload_bytes, raw_download_bytes,
        on_hold_expire_at, last_traffic_reset_at, online_at, connections, devices,
        created_at, sub_token, stripe_customer_id, current_plan_id, email, uuid, secret,
-       plan_traffic_limit_bytes
+       plan_traffic_limit_bytes, auto_traffic_reset
 FROM users
 WHERE sub_token = $1;
 
@@ -65,7 +65,7 @@ SELECT id, username, status, note, expire_at, data_limit_reset_strategy,
        raw_upload_bytes, raw_download_bytes,
        on_hold_expire_at, last_traffic_reset_at, online_at, connections, devices,
        created_at, sub_token, stripe_customer_id, current_plan_id, email, uuid, secret,
-       plan_traffic_limit_bytes
+       plan_traffic_limit_bytes, auto_traffic_reset
 FROM users
 WHERE stripe_customer_id = $1;
 
@@ -75,7 +75,7 @@ SELECT id, username, status, note, expire_at, data_limit_reset_strategy,
        raw_upload_bytes, raw_download_bytes,
        on_hold_expire_at, last_traffic_reset_at, online_at, connections, devices,
        created_at, sub_token, stripe_customer_id, current_plan_id, email, uuid, secret,
-       plan_traffic_limit_bytes
+       plan_traffic_limit_bytes, auto_traffic_reset
 FROM users
 ORDER BY id;
 
@@ -85,9 +85,12 @@ SELECT id, username, status, note, expire_at, data_limit_reset_strategy,
        raw_upload_bytes, raw_download_bytes,
        on_hold_expire_at, last_traffic_reset_at, online_at, connections, devices,
        created_at, sub_token, stripe_customer_id, current_plan_id, email, uuid, secret,
-       plan_traffic_limit_bytes
+       plan_traffic_limit_bytes, auto_traffic_reset
 FROM users
 WHERE id = ANY($1::text[]);
+
+-- name: SetUserAutoTrafficReset :execresult
+UPDATE users SET auto_traffic_reset = $2 WHERE id = $1;
 
 -- name: DeleteUserByID :execresult
 DELETE FROM users WHERE id = $1;

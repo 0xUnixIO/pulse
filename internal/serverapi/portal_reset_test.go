@@ -1,8 +1,10 @@
 package serverapi
 
 import (
+	"errors"
 	"net/http"
 	"net/http/httptest"
+	"strings"
 	"testing"
 	"time"
 
@@ -89,7 +91,7 @@ func TestResetTrafficForValidityRejectsInvalidStatesAndBoundaries(t *testing.T) 
 				ID: "u1", Username: "alice", Status: tt.status,
 				ExpireAt: tt.expire, UploadBytes: tt.used,
 			})
-			if _, err := store.ResetTrafficForValidity("u1", now, 30); err != users.ErrTrafficResetNotAllowed {
+			if _, err := store.ResetTrafficForValidity("u1", now, 30); !errors.Is(err, users.ErrTrafficResetNotAllowed) {
 				t.Fatalf("error = %v, want %v", err, users.ErrTrafficResetNotAllowed)
 			}
 		})
@@ -97,3 +99,47 @@ func TestResetTrafficForValidityRejectsInvalidStatesAndBoundaries(t *testing.T) 
 }
 
 func timePtr(t time.Time) *time.Time { return &t }
+
+func TestPortalAutoTrafficResetToggle(t *testing.T) {
+	expireAt := time.Now().UTC().AddDate(0, 0, 90)
+	store := users.NewMemoryStore()
+	// 已超限（stored status 仍为 active，EffectiveStatus 计算为 limited）
+	_, _ = store.UpsertUser(users.User{
+		ID: "u1", Username: "alice", Status: users.StatusActive, SubToken: "sub",
+		ExpireAt: &expireAt, UploadBytes: 200, TrafficLimit: 100,
+	})
+	api := &portalAPI{users: store, nodes: nodes.NewMemoryStore(), inbounds: inbounds.NewMemoryStore()}
+
+	post := func(body string) *httptest.ResponseRecorder {
+		rec := httptest.NewRecorder()
+		req := httptest.NewRequest(http.MethodPost, "/v1/portal/sub/auto-traffic-reset", strings.NewReader(body))
+		api.handlePortalPost(rec, req)
+		return rec
+	}
+
+	if rec := post(`{}`); rec.Code != http.StatusBadRequest {
+		t.Fatalf("missing enabled: status=%d, want 400", rec.Code)
+	}
+
+	// 开启：已超限且满足条件 → 立即重置
+	rec := post(`{"enabled":true}`)
+	if rec.Code != http.StatusOK {
+		t.Fatalf("status=%d body=%s", rec.Code, rec.Body.String())
+	}
+	got, _ := store.GetUser("u1")
+	if !got.AutoTrafficReset || got.UsedBytes != 0 || !got.ExpireAt.Equal(expireAt.AddDate(0, 0, -30)) {
+		t.Fatalf("enable did not persist flag / reset immediately: %+v", got)
+	}
+	if !strings.Contains(rec.Body.String(), `"reset":true`) {
+		t.Errorf("response should report reset: %s", rec.Body.String())
+	}
+
+	// 关闭
+	if rec := post(`{"enabled":false}`); rec.Code != http.StatusOK {
+		t.Fatalf("disable status=%d", rec.Code)
+	}
+	got, _ = store.GetUser("u1")
+	if got.AutoTrafficReset {
+		t.Fatal("flag should be off")
+	}
+}

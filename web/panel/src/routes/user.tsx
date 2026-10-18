@@ -30,6 +30,7 @@ import {
   TabsList,
   TabsTrigger,
   TabsContent,
+  Switch,
 } from "@/components/ui";
 import {
   Dialog,
@@ -58,6 +59,7 @@ interface PortalInfo {
   data_limit: number;
   expire_at: string | null;
   next_traffic_reset_at: string | null;
+  auto_traffic_reset?: boolean;
   nodes: { name: string; protocols: string[] }[];
   announcements?: Array<{ id: string; title: string; content: string; enabled: boolean; created_at: string }>;
   plan_name?: string;
@@ -477,6 +479,7 @@ export default function UserPage() {
   const [resetting, setResetting] = useState(false);
   const [resettingTraffic, setResettingTraffic] = useState(false);
   const [resetTrafficConfirmOpen, setResetTrafficConfirmOpen] = useState(false);
+  const [savingAutoReset, setSavingAutoReset] = useState(false);
   const [resetTokenConfirmOpen, setResetTokenConfirmOpen] = useState(false);
   const [repliedTicketCount, setRepliedTicketCount] = useState(0);
 
@@ -592,6 +595,34 @@ export default function UserPage() {
       toast(err instanceof Error ? err.message : "重置流量失败", "error");
     } finally {
       setResettingTraffic(false);
+    }
+  }
+
+  async function toggleAutoReset(enabled: boolean) {
+    setSavingAutoReset(true);
+    try {
+      const res = await fetch(`/v1/portal/${token}/auto-traffic-reset`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ enabled }),
+      });
+      const data = await res.json();
+      if (!res.ok) throw new Error(data.error || "保存失败");
+
+      const infoRes = await fetch(`/v1/portal/${token}/info`);
+      if (infoRes.ok) {
+        setInfo(await infoRes.json());
+      } else {
+        setInfo((prev) => (prev ? { ...prev, auto_traffic_reset: enabled } : prev));
+      }
+      toast(
+        data.reset ? "已开启自动重置，流量已重置" : enabled ? "已开启自动重置流量" : "已关闭自动重置流量",
+        "success",
+      );
+    } catch (err) {
+      toast(err instanceof Error ? err.message : "保存失败", "error");
+    } finally {
+      setSavingAutoReset(false);
     }
   }
 
@@ -729,6 +760,23 @@ export default function UserPage() {
                   >
                     {resettingTraffic ? "重置中…" : "重置流量"}
                   </Button>
+                  <div className="flex items-start justify-between gap-3 rounded-md border border-[hsl(var(--border))] p-3">
+                    <div className="space-y-0.5">
+                      <label htmlFor="auto-traffic-reset" className="text-sm font-medium">
+                        自动重置流量
+                      </label>
+                      <p className="text-xs text-[hsl(var(--muted-foreground))]">
+                        流量用完时，若剩余有效期超过 30 天，自动重置流量并扣减 30 天；不满足条件时照常停止服务。
+                      </p>
+                    </div>
+                    <Switch
+                      id="auto-traffic-reset"
+                      checked={!!info.auto_traffic_reset}
+                      disabled={savingAutoReset}
+                      onCheckedChange={toggleAutoReset}
+                      aria-label="自动重置流量"
+                    />
+                  </div>
                 </div>
 
                 <div className="flex items-center gap-2 text-sm">

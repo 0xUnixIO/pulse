@@ -2,6 +2,7 @@ package users
 
 import (
 	"errors"
+	"fmt"
 	"time"
 )
 
@@ -10,7 +11,16 @@ var (
 	ErrUserInboundNotFound    = errors.New("user inbound not found")
 	ErrUsernameTaken          = errors.New("username already exists")
 	ErrTrafficResetNotAllowed = errors.New("traffic reset not allowed")
+
+	// 以下错误都包裹 ErrTrafficResetNotAllowed，用于给出具体的不满足原因。
+	ErrTrafficResetBadStatus     = fmt.Errorf("%w: status not active", ErrTrafficResetNotAllowed)
+	ErrTrafficResetNoUsage       = fmt.Errorf("%w: no traffic used", ErrTrafficResetNotAllowed)
+	ErrTrafficResetPermanent     = fmt.Errorf("%w: permanent account", ErrTrafficResetNotAllowed)
+	ErrTrafficResetShortValidity = fmt.Errorf("%w: remaining validity too short", ErrTrafficResetNotAllowed)
 )
+
+// TrafficResetValidityCostDays 是自助/自动重置流量一次扣减的有效期天数。
+const TrafficResetValidityCostDays = 30
 
 const (
 	StatusActive   = "active"
@@ -61,6 +71,27 @@ type User struct {
 	Password string `json:"-"`
 	// IsAdmin 标记此用户为管理员，用于控制面登录鉴权。
 	IsAdmin bool `json:"is_admin"`
+	// AutoTrafficReset 用户开启后，流量用尽时若满足重置条件则自动重置流量并扣减有效期。
+	// 只通过 SetAutoTrafficReset 写入，UpsertUser 不会覆盖它（避免整行回写冲掉用户的开关）。
+	AutoTrafficReset bool `json:"auto_traffic_reset"`
+}
+
+// CheckTrafficReset 判断用户此刻能否用 costDays 天有效期换一次流量重置。
+// 条件与 Store.ResetTrafficForValidity 的原子条件保持一致；返回 nil 表示满足。
+func (u User) CheckTrafficReset(now time.Time, costDays int) error {
+	if u.Status != StatusActive && u.Status != StatusLimited {
+		return ErrTrafficResetBadStatus
+	}
+	if u.UploadBytes+u.DownloadBytes <= 0 {
+		return ErrTrafficResetNoUsage
+	}
+	if u.ExpireAt == nil {
+		return ErrTrafficResetPermanent
+	}
+	if !u.ExpireAt.After(now.AddDate(0, 0, costDays)) {
+		return ErrTrafficResetShortValidity
+	}
+	return nil
 }
 
 // UserInbound 用户对某个具体 inbound 的访问凭据（一条记录对应一个 (user_id, inbound_id) 对）。
@@ -91,7 +122,10 @@ type Store interface {
 	// User CRUD
 	UpsertUser(user User) (User, error)
 	// ResetTrafficForValidity 原子地清零累计流量并扣减有效期；不删除历史流量明细。
+	// 条件见 User.CheckTrafficReset，不满足时返回 ErrTrafficResetNotAllowed。
 	ResetTrafficForValidity(userID string, now time.Time, validityCostDays int) (User, error)
+	// SetAutoTrafficReset 单独更新用户的自动重置流量开关。
+	SetAutoTrafficReset(userID string, enabled bool) error
 	GetUser(id string) (User, error)
 	GetUserBySubToken(token string) (User, error)
 	GetUserByStripeCustomerID(customerID string) (User, error)

@@ -67,6 +67,8 @@ type updateUserRequest struct {
 	PlanTrafficLimit *int64 `json:"plan_traffic_limit_bytes,omitempty"`
 	// Password 非 nil 时更新门户密码：空字符串清除密码，非空字符串设置新密码。
 	Password *string `json:"password,omitempty"`
+	// AutoTrafficReset 非 nil 时更新「流量用尽自动重置」开关。
+	AutoTrafficReset *bool `json:"auto_traffic_reset,omitempty"`
 }
 
 // createAccessRequest 添加用户到 inbound 的请求（只需指定 inbound ID）。
@@ -356,6 +358,22 @@ func (a *userAPI) handleUpdateUser(w http.ResponseWriter, r *http.Request, userI
 		// 仅改了状态/流量/到期时间，需推送到已关联的节点
 		if err := a.triggerUserApply(userID); err != nil {
 			log.Printf("handleUpdateUser: trigger apply %s: %v", userID, err)
+		}
+	}
+	// 自动重置开关单独落库（不经整行 UpsertUser）；开启时若用户已超限且满足条件则立即重置。
+	if req.AutoTrafficReset != nil {
+		if err := a.users.SetAutoTrafficReset(userID, *req.AutoTrafficReset); err != nil {
+			internalError(w, r, err)
+			return
+		}
+		updated.AutoTrafficReset = *req.AutoTrafficReset
+		if *req.AutoTrafficReset {
+			if reset, ok := jobs.TryAutoResetTraffic(r.Context(), a.users, userID, time.Now().UTC(), a.applyOpts.Alerter); ok {
+				updated = reset
+				if err := a.triggerUserApply(userID); err != nil {
+					log.Printf("handleUpdateUser: trigger apply after auto reset %s: %v", userID, err)
+				}
+			}
 		}
 	}
 	writeJSON(w, http.StatusOK, updated)

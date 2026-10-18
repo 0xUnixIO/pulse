@@ -315,6 +315,7 @@ type User struct {
 	Uuid                   string
 	Secret                 string
 	PlanTrafficLimitBytes  int64
+	AutoTrafficReset       bool
 }
 
 type UserGroup struct {

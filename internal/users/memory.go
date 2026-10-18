@@ -34,8 +34,22 @@ func (s *MemoryStore) UpsertUser(user User) (User, error) {
 		user.DataLimitResetStrategy = ResetStrategyNoReset
 	}
 	user.UsedBytes = user.UploadBytes + user.DownloadBytes
+	// 与 Postgres 实现一致：UpsertUser 不改动自动重置开关，只能经 SetAutoTrafficReset 修改。
+	user.AutoTrafficReset = s.users[user.ID].AutoTrafficReset
 	s.users[user.ID] = user
 	return user, nil
+}
+
+func (s *MemoryStore) SetAutoTrafficReset(userID string, enabled bool) error {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	user, ok := s.users[userID]
+	if !ok {
+		return ErrUserNotFound
+	}
+	user.AutoTrafficReset = enabled
+	s.users[userID] = user
+	return nil
 }
 
 func (s *MemoryStore) ResetTrafficForValidity(userID string, now time.Time, validityCostDays int) (User, error) {
@@ -45,12 +59,8 @@ func (s *MemoryStore) ResetTrafficForValidity(userID string, now time.Time, vali
 	if !ok {
 		return User{}, ErrUserNotFound
 	}
-	if user.Status != StatusActive && user.Status != StatusLimited {
-		return User{}, ErrTrafficResetNotAllowed
-	}
-	if user.UploadBytes+user.DownloadBytes <= 0 || user.ExpireAt == nil ||
-		!user.ExpireAt.After(now.AddDate(0, 0, validityCostDays)) {
-		return User{}, ErrTrafficResetNotAllowed
+	if err := user.CheckTrafficReset(now, validityCostDays); err != nil {
+		return User{}, err
 	}
 	expireAt := user.ExpireAt.AddDate(0, 0, -validityCostDays)
 	user.UploadBytes = 0

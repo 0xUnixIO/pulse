@@ -111,6 +111,8 @@ type SyncUsageResult struct {
 	NodesReloaded int      `json:"nodes_reloaded"`
 	NodesStopped  int      `json:"nodes_stopped"`
 	Errors        []string `json:"errors"`
+	// AutoTrafficResets 本轮因流量用尽而自动重置流量的用户数。
+	AutoTrafficResets int `json:"auto_traffic_resets"`
 }
 
 // SyncUsage 从各节点拉取流量统计，更新用户字节数，
@@ -417,7 +419,6 @@ func SyncUsageWith(ctx context.Context, store users.Store, nodeStore nodes.Store
 			}
 
 			user.UsedBytes = user.UploadBytes + user.DownloadBytes
-			statusChanged := prevEnabled != user.EffectiveEnabledAt(now)
 			// 使用 savedUser 接收持久化结果，不写回 userMap，避免本节点累加的脏数据
 			// 在同一用户出现在多个节点时被下一个节点循环的 GetUsersByIDs 读到旧值。
 			savedUser, err := store.UpsertUser(user)
@@ -425,6 +426,13 @@ func SyncUsageWith(ctx context.Context, store users.Store, nodeStore nodes.Store
 				result.Errors = append(result.Errors, fr.node.ID+": "+err.Error())
 				continue
 			}
+			// 超限且用户开启了自动重置：先落库本轮流量，再原子地扣减有效期换取重置，
+			// 成功则用户保持（或恢复）可用；不满足条件时保持超限处置。
+			if reset, ok := autoResetTraffic(ctx, store, savedUser, now, applyOpts.Alerter); ok {
+				savedUser = reset
+				result.AutoTrafficResets++
+			}
+			statusChanged := prevEnabled != savedUser.EffectiveEnabledAt(now)
 			if statusChanged {
 				reloadNeeded = true
 				changedUsers[user.ID] = savedUser.EffectiveEnabledAt(now)

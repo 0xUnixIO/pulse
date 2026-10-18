@@ -116,7 +116,8 @@ CREATE TABLE IF NOT EXISTS users (
     email                     TEXT NOT NULL DEFAULT '',
     uuid                      TEXT NOT NULL DEFAULT '',
     secret                    TEXT NOT NULL DEFAULT '',
-    plan_traffic_limit_bytes  BIGINT NOT NULL DEFAULT 0
+    plan_traffic_limit_bytes  BIGINT NOT NULL DEFAULT 0,
+    auto_traffic_reset        BOOLEAN NOT NULL DEFAULT FALSE
 );
 
 CREATE UNIQUE INDEX IF NOT EXISTS idx_users_username ON users(username);

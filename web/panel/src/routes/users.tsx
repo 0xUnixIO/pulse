@@ -33,6 +33,7 @@ import {
   PopoverTrigger,
   PopoverContent,
   DatePicker,
+  Switch,
   toast,
 } from "@/components/ui";
 import { ScrollArea } from "@/components/ui/scroll-area";
@@ -242,6 +243,7 @@ export default function UsersPage() {
   const [editExpireAt, setEditExpireAt] = useState("");
   const [editResetStrategy, setEditResetStrategy] = useState<ResetStrategy>("no_reset");
   const [editNote, setEditNote] = useState("");
+  const [editAutoReset, setEditAutoReset] = useState(false);
   const [editSubToken, setEditSubToken] = useState("");
   const [editOnHoldExpireAt, setEditOnHoldExpireAt] = useState("");
   const [editLastResetAt, setEditLastResetAt] = useState("");
@@ -518,6 +520,7 @@ export default function UsersPage() {
     setEditExpireAt(isoToDateInput(user.expire_at));
     setEditResetStrategy(user.data_limit_reset_strategy);
     setEditNote(user.note ?? "");
+    setEditAutoReset(!!user.auto_traffic_reset);
     setEditSubToken(user.sub_token ?? "");
     setEditOnHoldExpireAt(isoToDateInput(user.on_hold_expire_at));
     setEditLastResetAt(isoToDateInput(user.last_traffic_reset_at));
@@ -544,6 +547,9 @@ export default function UsersPage() {
         note: editNote,
         inbound_ids: editInboundIds,
       };
+      if (editAutoReset !== !!editingUser.auto_traffic_reset) {
+        body.auto_traffic_reset = editAutoReset;
+      }
 
       if (editStatus === "on_hold") {
         if (editOnHoldExpireAt) {
@@ -1208,6 +1214,21 @@ export default function UsersPage() {
                 })()}
               </div>
             )}
+
+            {/* Auto traffic reset */}
+            <div className="flex items-start justify-between gap-3">
+              <div className="grid gap-1">
+                <Label htmlFor="edit-auto-reset">自动重置流量</Label>
+                <p className="text-xs text-[hsl(var(--muted-foreground))]">
+                  流量用完时，若剩余有效期超过 30 天，自动重置流量并扣减 30 天
+                </p>
+              </div>
+              <Switch
+                id="edit-auto-reset"
+                checked={editAutoReset}
+                onCheckedChange={setEditAutoReset}
+              />
+            </div>
 
             {/* Note */}
             <div className="grid gap-2">

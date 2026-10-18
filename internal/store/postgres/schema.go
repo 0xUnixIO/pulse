@@ -426,6 +426,13 @@ var schemaMigrations = []migration{
 			`ALTER TABLE orders ADD COLUMN IF NOT EXISTS quantity INTEGER NOT NULL DEFAULT 1`,
 		},
 	},
+	{
+		version: 6,
+		label:   "users.auto_traffic_reset (流量用尽时自动重置并扣减有效期，默认关闭)",
+		stmts: []string{
+			`ALTER TABLE users ADD COLUMN IF NOT EXISTS auto_traffic_reset BOOLEAN NOT NULL DEFAULT FALSE`,
+		},
+	},
 }
 
 func (db *DB) init() error {
