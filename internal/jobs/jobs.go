@@ -580,11 +580,20 @@ func tryDeltaUsers(
 	}
 
 	ops := 0
+	// 同一用户可能同时有直接分配和组分配，在同一 inbound 上对应两条记录。
+	// 必须按 (inbound, user) 去重，与 proxycfg.Build 保持一致：否则第二次
+	// RemoveUser 报 not found / AddUser 报 already exists，触发整节点重启断流。
+	seen := make(map[[2]string]struct{}, len(nodeAccesses))
 	for _, acc := range nodeAccesses {
 		newEnabled, changed := changedUsers[acc.UserID]
 		if !changed {
 			continue
 		}
+		key := [2]string{acc.InboundID, acc.UserID}
+		if _, dup := seen[key]; dup {
+			continue
+		}
+		seen[key] = struct{}{}
 		u, ok := userMap[acc.UserID]
 		if !ok {
 			continue
