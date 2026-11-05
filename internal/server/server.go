@@ -799,18 +799,28 @@ func Run() error {
 		switch r.Method {
 		case http.MethodGet:
 			baseURL, _ := settingsStore.GetSetting("shop_base_url")
-			writeJSON(w, http.StatusOK, map[string]any{"base_url": baseURL})
+			renewalOnly, _ := settingsStore.GetSetting(payment.SettingShopRenewalOnly)
+			writeJSON(w, http.StatusOK, map[string]any{"base_url": baseURL, "renewal_only": renewalOnly == "true"})
 		case http.MethodPut:
 			var body struct {
-				BaseURL string `json:"base_url"`
+				BaseURL     *string `json:"base_url"`
+				RenewalOnly *bool   `json:"renewal_only"`
 			}
 			if err := json.NewDecoder(r.Body).Decode(&body); err != nil {
 				writeJSON(w, http.StatusBadRequest, map[string]any{"error": "invalid json"})
 				return
 			}
-			if err := settingsStore.SetSetting("shop_base_url", body.BaseURL); err != nil {
-				writeJSON(w, http.StatusInternalServerError, map[string]any{"error": err.Error()})
-				return
+			if body.BaseURL != nil {
+				if err := settingsStore.SetSetting("shop_base_url", *body.BaseURL); err != nil {
+					writeJSON(w, http.StatusInternalServerError, map[string]any{"error": err.Error()})
+					return
+				}
+			}
+			if body.RenewalOnly != nil {
+				if err := settingsStore.SetSetting(payment.SettingShopRenewalOnly, strconv.FormatBool(*body.RenewalOnly)); err != nil {
+					writeJSON(w, http.StatusInternalServerError, map[string]any{"error": err.Error()})
+					return
+				}
 			}
 			writeJSON(w, http.StatusOK, map[string]any{"saved": true})
 		default:

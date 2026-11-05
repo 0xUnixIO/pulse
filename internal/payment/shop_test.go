@@ -129,3 +129,70 @@ func TestCheckoutEmailForUserKeepsRealEmail(t *testing.T) {
 		t.Fatalf("email = %q, want alice@example.com", email)
 	}
 }
+
+type mapSettings map[string]string
+
+func (m mapSettings) GetSetting(key string) (string, bool) { v, ok := m[key]; return v, ok }
+
+func TestCheckoutRenewalOnlyRejectsNewUser(t *testing.T) {
+	for _, tc := range []struct {
+		name string
+		body string
+	}{
+		{"no sub_token", `{"plan_id":"plan-1","email":"buyer@example.com"}`},
+		{"unknown sub_token", `{"plan_id":"plan-1","email":"buyer@example.com","sub_token":"nope"}`},
+	} {
+		planStore := newFakePlanStore()
+		planStore.plans["plan-1"] = plans.Plan{ID: "plan-1", Enabled: true, StripePriceID: "price_test", PriceCents: 500, StockLimit: -1}
+		orderStore := newFakeOrderStore()
+		api := newTestShopAPI(planStore, orderStore)
+		api.Settings = mapSettings{SettingShopRenewalOnly: "true"}
+		rec := performCheckoutRequest(t, api, tc.body)
+		if rec.Code != http.StatusForbidden {
+			t.Fatalf("%s: status = %d, want %d; body=%s", tc.name, rec.Code, http.StatusForbidden, rec.Body.String())
+		}
+		if len(orderStore.orders) != 0 {
+			t.Fatalf("%s: rejected checkout must not create an order", tc.name)
+		}
+	}
+}
+
+func TestCheckoutRenewalOnlyAllowsExistingUser(t *testing.T) {
+	planStore := newFakePlanStore()
+	planStore.plans["plan-1"] = plans.Plan{ID: "plan-1", Enabled: true, StripePriceID: "price_test", PriceCents: 500, StockLimit: -1}
+	orderStore := newFakeOrderStore()
+	orderStore.upsertErr = errors.New("stop before Stripe")
+	userStore := users.NewMemoryStore()
+	if _, err := userStore.UpsertUser(users.User{ID: "u1", Username: "alice", SubToken: "tok1"}); err != nil {
+		t.Fatal(err)
+	}
+	api := newTestShopAPI(planStore, orderStore)
+	api.UserStore = userStore
+	api.Settings = mapSettings{SettingShopRenewalOnly: "true"}
+	// 粘贴完整订阅链接也应识别
+	rec := performCheckoutRequest(t, api, `{"plan_id":"plan-1","email":"x@noreply.local","sub_token":"https://a.example.com/sub/tok1"}`)
+	if rec.Code != http.StatusUnprocessableEntity {
+		t.Fatalf("status = %d, want %d; body=%s", rec.Code, http.StatusUnprocessableEntity, rec.Body.String())
+	}
+	for _, order := range orderStore.orders {
+		if order.UserID != "u1" {
+			t.Fatalf("user_id = %q, want u1", order.UserID)
+		}
+	}
+}
+
+func TestExtractSubToken(t *testing.T) {
+	cases := map[string]string{
+		"":                                  "",
+		" abc ":                             "abc",
+		"https://x.com/sub/abc":             "abc",
+		"https://x.com/sub/abc/?flag=clash": "abc",
+		"https://x.com/user/abc#top":        "abc",
+		"https://x.com/sub/abc/clash":       "abc",
+	}
+	for in, want := range cases {
+		if got := extractSubToken(in); got != want {
+			t.Errorf("extractSubToken(%q) = %q, want %q", in, got, want)
+		}
+	}
+}

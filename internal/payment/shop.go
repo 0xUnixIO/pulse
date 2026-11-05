@@ -119,6 +119,18 @@ type SettingsGetter interface {
 	GetSetting(key string) (string, bool)
 }
 
+// SettingShopRenewalOnly 为 "true" 时商店仅允许已有用户续费，禁止新用户购买。
+const SettingShopRenewalOnly = "shop_renewal_only"
+
+// renewalOnly 返回商店是否处于"仅续费"模式。
+func (s *ShopAPI) renewalOnly() bool {
+	if s.Settings == nil {
+		return false
+	}
+	v, _ := s.Settings.GetSetting(SettingShopRenewalOnly)
+	return v == "true"
+}
+
 // TokenValidator 校验 Bearer token 是否有效（复用 panel admin session）。
 type TokenValidator interface {
 	ValidateToken(token string) bool
@@ -174,7 +186,7 @@ func (s *ShopAPI) listPlansHandler(mode string) http.HandlerFunc {
 			writeJSONError(w, http.StatusInternalServerError, "failed to list plans")
 			return
 		}
-		writeJSON(w, http.StatusOK, map[string]any{"plans": list})
+		writeJSON(w, http.StatusOK, map[string]any{"plans": list, "renewal_only": s.renewalOnly()})
 	}
 }
 
@@ -230,6 +242,7 @@ func (s *ShopAPI) createCheckoutHandler(mode, shopPath string) http.HandlerFunc 
 			}
 		}
 
+		subToken = extractSubToken(subToken)
 		if planID == "" || email == "" {
 			writeJSONError(w, http.StatusBadRequest, "plan_id and email are required")
 			return
@@ -279,8 +292,6 @@ func (s *ShopAPI) createCheckoutHandler(mode, shopPath string) http.HandlerFunc 
 			return
 		}
 
-		orderID := idgen.NextString()
-
 		var userID string
 		if subToken != "" {
 			user, err := s.UserStore.GetUserBySubToken(subToken)
@@ -289,6 +300,16 @@ func (s *ShopAPI) createCheckoutHandler(mode, shopPath string) http.HandlerFunc 
 				email = checkoutEmailForUser(user)
 			}
 		}
+		if userID == "" && s.renewalOnly() {
+			msg := "当前暂停新用户购买，仅支持已有用户续费"
+			if subToken != "" {
+				msg = "订阅链接无效，未找到对应用户"
+			}
+			writeJSONError(w, http.StatusForbidden, msg)
+			return
+		}
+
+		orderID := idgen.NextString()
 
 		order := orders.Order{
 			ID:          orderID,
@@ -338,6 +359,29 @@ func (s *ShopAPI) createCheckoutHandler(mode, shopPath string) http.HandlerFunc 
 			http.Redirect(w, r, checkoutURL, http.StatusSeeOther)
 		}
 	}
+}
+
+// extractSubToken 允许用户粘贴完整订阅链接（.../sub/<token> 或 .../user/<token>），
+// 从中提取 token；纯 token 原样返回。
+func extractSubToken(raw string) string {
+	v := strings.TrimSpace(raw)
+	if v == "" {
+		return ""
+	}
+	if i := strings.IndexAny(v, "?#"); i >= 0 {
+		v = v[:i]
+	}
+	v = strings.TrimRight(v, "/")
+	for _, marker := range []string{"/sub/", "/user/"} {
+		if i := strings.LastIndex(v, marker); i >= 0 {
+			v = v[i+len(marker):]
+			if j := strings.Index(v, "/"); j >= 0 {
+				v = v[:j]
+			}
+			break
+		}
+	}
+	return v
 }
 
 func writeJSON(w http.ResponseWriter, status int, payload any) {
