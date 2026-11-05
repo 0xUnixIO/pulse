@@ -98,6 +98,8 @@ export default function ShopPage({ basePath = "/shop" }: { basePath?: string }) 
   const [checkoutLoading, setCheckoutLoading] = useState(false);
   const [checkoutError, setCheckoutError] = useState("");
   const [quantity, setQuantity] = useState(1);
+  const [renewalOnly, setRenewalOnly] = useState(false);
+  const urlSubToken = new URLSearchParams(window.location.search).get("sub_token") ?? "";
 
   /* ── Fetch plans ─────────────────────────────────────────────── */
 
@@ -119,7 +121,10 @@ export default function ShopPage({ basePath = "/shop" }: { basePath?: string }) 
           throw new Error("商店服务未启用");
         }
         const data = await res.json();
-        if (!cancelled) setPlans(data.plans ?? []);
+        if (!cancelled) {
+          setPlans(data.plans ?? []);
+          setRenewalOnly(!!data.renewal_only);
+        }
       } catch (err) {
         if (!cancelled) setError(err instanceof Error ? err.message : "加载失败");
       } finally {
@@ -135,6 +140,10 @@ export default function ShopPage({ basePath = "/shop" }: { basePath?: string }) 
   async function handleCheckout(e: FormEvent) {
     e.preventDefault();
     if (!selectedPlan) return;
+    if (renewalOnly && !subToken.trim()) {
+      setCheckoutError("请填写您的订阅链接");
+      return;
+    }
 
     setCheckoutError("");
     setCheckoutLoading(true);
@@ -248,6 +257,15 @@ export default function ShopPage({ basePath = "/shop" }: { basePath?: string }) 
           </p>
         </div>
 
+        {/* 仅续费提示 */}
+        {renewalOnly && (
+          <div className="mx-auto mb-8 max-w-2xl rounded-lg border border-amber-500/40 bg-amber-500/10 px-4 py-3 text-center text-sm text-amber-700 dark:text-amber-400">
+            {urlSubToken
+              ? "当前仅开放已有用户续费，付款后将自动续期到您的账户。"
+              : "当前暂停新用户购买，仅支持已有用户续费。请从用户中心点击续费进入，或在购买时填写您的订阅链接。"}
+          </div>
+        )}
+
         {/* Loading */}
         {loading && (
           <div className="flex justify-center py-20">
@@ -341,7 +359,7 @@ export default function ShopPage({ basePath = "/shop" }: { basePath?: string }) 
                         onClick={() => openCheckout(plan)}
                         disabled={soldOut}
                       >
-                        {soldOut ? "已售罄" : "购买"}
+                        {soldOut ? "已售罄" : renewalOnly ? "续费" : "购买"}
                       </Button>
                     );
                   })()}
@@ -362,7 +380,7 @@ export default function ShopPage({ basePath = "/shop" }: { basePath?: string }) 
         <DialogContent className="sm:max-w-md">
           <form onSubmit={handleCheckout}>
             <DialogHeader>
-              <DialogTitle>确认购买</DialogTitle>
+              <DialogTitle>{renewalOnly ? "确认续费" : "确认购买"}</DialogTitle>
               <DialogDescription>
                 {selectedPlan
                   ? `${selectedPlan.name} — 单价 ${formatPrice(selectedPlan.price_cents, selectedPlan.currency)}`
@@ -379,6 +397,25 @@ export default function ShopPage({ basePath = "/shop" }: { basePath?: string }) 
 
               {selectedPlan && (
                 <div className="space-y-4">
+                  {renewalOnly && !urlSubToken && (
+                    <div className="space-y-2">
+                      <label htmlFor="checkout-sub-token" className="text-sm font-medium">
+                        订阅链接
+                      </label>
+                      <Input
+                        id="checkout-sub-token"
+                        value={subToken}
+                        onChange={(event) => setSubToken(event.target.value)}
+                        placeholder="粘贴您的订阅链接或用户中心链接"
+                        disabled={checkoutLoading}
+                        className="font-mono text-sm"
+                        autoComplete="off"
+                      />
+                      <p className="text-xs text-[hsl(var(--muted-foreground))]">
+                        仅限已有用户续费，付款后将续期到该订阅对应的账户。
+                      </p>
+                    </div>
+                  )}
                   <div className="space-y-2">
                     <label htmlFor="checkout-quantity" className="text-sm font-medium">
                       购买数量
@@ -443,7 +480,10 @@ export default function ShopPage({ basePath = "/shop" }: { basePath?: string }) 
               >
                 取消
               </Button>
-              <Button type="submit" disabled={checkoutLoading || !selectedPlan}>
+              <Button
+                type="submit"
+                disabled={checkoutLoading || !selectedPlan || (renewalOnly && !subToken.trim())}
+              >
                 {checkoutLoading ? (
                   <span className="flex items-center gap-2">
                     <span className="inline-block h-4 w-4 animate-spin rounded-full border-2 border-current border-t-transparent" />

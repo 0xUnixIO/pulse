@@ -9,6 +9,7 @@ import {
   Input,
   Label,
   Separator,
+  Switch,
   toast,
   Tabs,
   TabsList,
@@ -83,6 +84,8 @@ export default function SettingsPage() {
 
   // Shop settings
   const [shopBaseURL, setShopBaseURL] = useState("");
+  const [shopRenewalOnly, setShopRenewalOnly] = useState(false);
+  const [shopRenewalSaving, setShopRenewalSaving] = useState(false);
   const [shopLoading, setShopLoading] = useState(true);
   const [shopSaving, setShopSaving] = useState(false);
   const [shopMsg, setShopMsg] = useState<string | null>(null);
@@ -256,8 +259,11 @@ export default function SettingsPage() {
   function fetchShopSettings() {
     setShopLoading(true);
     api
-      .get<{ base_url: string }>("/settings/shop")
-      .then((d) => setShopBaseURL(d.base_url ?? ""))
+      .get<{ base_url: string; renewal_only?: boolean }>("/settings/shop")
+      .then((d) => {
+        setShopBaseURL(d.base_url ?? "");
+        setShopRenewalOnly(!!d.renewal_only);
+      })
       .catch((err) => { if (handleAuthError(err)) return; })
       .finally(() => setShopLoading(false));
   }
@@ -270,6 +276,20 @@ export default function SettingsPage() {
       .then(() => setShopMsg("已保存"))
       .catch((err) => { if (handleAuthError(err)) return; setShopMsg("保存失败"); })
       .finally(() => { setShopSaving(false); setTimeout(() => setShopMsg(null), 2500); });
+  }
+  function toggleShopRenewalOnly(next: boolean) {
+    const prev = shopRenewalOnly;
+    setShopRenewalOnly(next);
+    setShopRenewalSaving(true);
+    api
+      .put<{ saved: boolean }>("/settings/shop", { renewal_only: next })
+      .then(() => toast.success(next ? "已开启仅续费模式" : "已恢复新用户购买"))
+      .catch((err) => {
+        setShopRenewalOnly(prev);
+        if (handleAuthError(err)) return;
+        toast.error("保存失败");
+      })
+      .finally(() => setShopRenewalSaving(false));
   }
 
   // ── Fetch Bark alert settings ──────────────────────────────────
@@ -770,6 +790,21 @@ export default function SettingsPage() {
                 <div className="h-9 w-full animate-pulse rounded bg-[hsl(var(--muted))]" />
               ) : (
                 <div className="space-y-4">
+                  <div className="flex items-start justify-between gap-4 rounded-lg border border-[hsl(var(--border))] px-4 py-3">
+                    <div className="space-y-1">
+                      <Label htmlFor="shop-renewal-only" className="text-sm">仅允许续费</Label>
+                      <p className="text-xs text-[hsl(var(--muted-foreground))]">
+                        开启后 Shop 页面禁止新用户购买，只有持有效订阅链接的已有用户可以续费。
+                      </p>
+                    </div>
+                    <Switch
+                      id="shop-renewal-only"
+                      checked={shopRenewalOnly}
+                      onCheckedChange={toggleShopRenewalOnly}
+                      disabled={shopRenewalSaving}
+                    />
+                  </div>
+                  <Separator />
                   <p className="text-sm text-[hsl(var(--muted-foreground))]">
                     Stripe 付款后的回调跳转地址。填写站点的公开域名，例如 <code className="rounded bg-[hsl(var(--muted))] px-1 font-mono text-xs">https://example.com</code>。
                   </p>
